@@ -49,7 +49,7 @@ from app.core.database.models import Asset, Connection, Run, SharePointSyncConfi
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import async_delete_sync_config_task, sharepoint_import_task, sharepoint_sync_task
-from app.dependencies import get_current_org_id, get_current_user, require_data_source_enabled, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin, require_data_source_enabled
 
 # Initialize router
 router = APIRouter(
@@ -247,7 +247,7 @@ async def list_sync_configs(
 async def create_sync_config(
     request: SharePointSyncConfigCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """Create a new SharePoint sync config."""
     async with database_service.get_session() as session:
@@ -299,7 +299,7 @@ async def update_sync_config(
     config_id: UUID,
     request: SharePointSyncConfigUpdateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """
     Update a SharePoint sync config.
@@ -428,7 +428,7 @@ async def update_sync_config(
 async def archive_sync_config(
     config_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """
     Archive a SharePoint sync config and remove documents from search index.
@@ -496,7 +496,7 @@ async def archive_sync_config(
 async def delete_sync_config(
     config_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """
     Initiate async deletion of a SharePoint sync config.
@@ -660,7 +660,7 @@ async def trigger_sync(
 async def cancel_stuck_runs(
     config_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """
     Cancel any stuck pending/running runs for this sync config.
@@ -818,7 +818,7 @@ async def cleanup_deleted_documents(
     config_id: UUID,
     request: SharePointCleanupRequest = SharePointCleanupRequest(),
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """Cleanup documents marked as deleted in source."""
     async with database_service.get_session() as session:
@@ -857,7 +857,7 @@ async def remove_synced_items(
     config_id: UUID,
     request: SharePointRemoveItemsRequest,
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """
     Remove specific synced items from a sync config.
@@ -1096,7 +1096,7 @@ async def import_sharepoint_files(
 async def reset_delta_token(
     config_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """
     Reset delta token to force full re-scan on next sync.
@@ -1141,7 +1141,7 @@ async def update_delta_setting(
     config_id: UUID,
     enabled: bool = Query(..., description="Enable or disable delta query for this sync config"),
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """
     Enable or disable delta query for a sync config.

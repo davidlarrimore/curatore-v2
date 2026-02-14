@@ -5,30 +5,26 @@ FastAPI dependency injection functions for authentication and authorization.
 Provides reusable dependencies for protecting endpoints with JWT tokens or API keys,
 extracting current user/organization context, and enforcing role-based access control.
 
+Roles: admin (system-wide, organization_id=NULL), member (org-scoped).
+
 Key Dependencies:
     - get_current_user_from_jwt: Validate JWT Bearer token
     - get_current_user_from_api_key: Validate X-API-Key header
     - get_current_user: Flexible auth (JWT or API key)
     - get_current_principal: Get User or ServiceAccount from API key
     - require_admin: Ensure user has system admin role
-    - require_org_admin: Ensure user has org admin role
-    - require_org_admin_or_above: Ensure user has org_admin or admin role
     - get_effective_org_id: Get org context (supports X-Organization-Id header for admins)
     - require_org_context: Require organization context (not system mode)
     - get_current_organization: Get user's organization
 
 Usage:
     from fastapi import Depends
-    from app.dependencies import get_current_user, require_org_admin, require_admin
+    from app.dependencies import get_current_user, require_admin
     from app.core.database.models import User
 
     @router.get("/protected")
     async def protected_endpoint(user: User = Depends(get_current_user)):
         return {"user_id": str(user.id)}
-
-    @router.post("/org-admin-only")
-    async def org_admin_endpoint(user: User = Depends(require_org_admin)):
-        return {"message": "Org admin access granted"}
 
     @router.post("/system-admin-only")
     async def system_admin_endpoint(user: User = Depends(require_admin)):
@@ -429,7 +425,9 @@ async def get_current_user(
     # Backward compatibility mode: if auth is disabled, return first user
     if not settings.enable_auth:
         async with database_service.get_session() as session:
-            result = await session.execute(select(User).limit(1))
+            result = await session.execute(
+                select(User).where(User.role == "admin").limit(1)
+            )
             user = result.scalar_one_or_none()
 
             if not user:
@@ -469,47 +467,6 @@ async def get_current_user(
 # =========================================================================
 
 
-async def require_org_admin(user: User = Depends(get_current_user)) -> User:
-    """
-    Ensure the current user has organization admin role.
-
-    Dependency that requires user to be authenticated AND have org_admin role.
-    System admins (role='admin') are NOT allowed - they should use require_org_admin_or_above.
-    Returns 403 if user doesn't have sufficient permissions.
-
-    Args:
-        user: Current authenticated user (from get_current_user)
-
-    Returns:
-        User: Current authenticated user (guaranteed to be org_admin)
-
-    Raises:
-        HTTPException: 403 if user is not an organization admin
-
-    Example:
-        @router.post("/admin/settings")
-        async def update_settings(
-            settings: dict,
-            user: User = Depends(require_org_admin)
-        ):
-            # Only org_admin users can access this endpoint
-            return {"message": "Settings updated"}
-
-    Roles:
-        - org_admin: Full organization access
-        - member: Standard user access
-        - viewer: Read-only access
-    """
-    if user.role != "org_admin":
-        logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted admin action")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organization admin role required",
-        )
-
-    return user
-
-
 async def require_admin(user: User = Depends(get_current_user)) -> User:
     """
     Ensure the current user has system admin role.
@@ -541,93 +498,6 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="System admin role required",
-        )
-
-    return user
-
-
-async def require_org_admin_or_above(
-    user: User = Depends(get_current_user),
-    org_id: Optional[UUID_TYPE] = None,
-) -> User:
-    """
-    Ensure the current user has org_admin or admin role.
-
-    For system admins, any organization is allowed. For org_admins, they must
-    be accessing their own organization. If org_id is provided, validates
-    the user has access to that specific organization.
-
-    Args:
-        user: Current authenticated user
-        org_id: Optional organization ID to validate access to
-
-    Returns:
-        User: Current authenticated user (guaranteed to be org_admin or admin)
-
-    Raises:
-        HTTPException: 403 if user doesn't have sufficient permissions
-
-    Example:
-        @router.put("/organizations/{org_id}/settings")
-        async def update_org_settings(
-            org_id: UUID,
-            settings: dict,
-            user: User = Depends(require_org_admin_or_above),
-        ):
-            # Both org_admin (of this org) and system admin can update
-            return {"message": "Settings updated"}
-    """
-    # System admin can access anything
-    if user.role == "admin":
-        return user
-
-    # Org admin can only access their own org
-    if user.role == "org_admin":
-        if org_id and str(user.organization_id) != str(org_id):
-            logger.warning(
-                f"Permission denied: org_admin {user.email} attempted to access org {org_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot access other organizations",
-            )
-        return user
-
-    # Neither admin nor org_admin
-    logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted org admin action")
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Organization admin or system admin role required",
-    )
-
-
-async def require_member_or_admin(user: User = Depends(get_current_user)) -> User:
-    """
-    Ensure the current user has at least member role (member, org_admin, or admin).
-
-    Args:
-        user: Current authenticated user
-
-    Returns:
-        User: Current authenticated user (guaranteed to be member, org_admin, or admin)
-
-    Raises:
-        HTTPException: 403 if user is only a viewer
-
-    Example:
-        @router.post("/documents/upload")
-        async def upload_document(
-            file: UploadFile,
-            user: User = Depends(require_member_or_admin)
-        ):
-            # Viewers cannot upload
-            return {"message": "Document uploaded"}
-    """
-    if user.role not in ["admin", "org_admin", "member"]:
-        logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted member action")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Member or admin role required",
         )
 
     return user

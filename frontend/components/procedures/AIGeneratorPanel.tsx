@@ -34,7 +34,7 @@ interface ConversationEntry {
   timestamp: number
   progressLog?: ProgressEntry[]
   diagnostics?: PlanDiagnostics | null
-  planJson?: Record<string, any> | null
+  planJson?: Record<string, unknown> | null
   isGenerating?: boolean
 }
 
@@ -143,10 +143,10 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
         }])
         break
 
-      case 'clarification' as any:
+      case 'clarification':
         setCurrentProgressLog(prev => [...prev, {
           type: 'clarification' as const,
-          message: (event as any).message || 'The AI needs more information.',
+          message: event.message || 'The AI needs more information.',
           timestamp: now,
         }])
         break
@@ -171,7 +171,7 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
 
     try {
       // Auto-pass currentPlan when procedure exists (replaces manual refine mode)
-      let currentPlan: Record<string, any> | undefined
+      let currentPlan: Record<string, unknown> | undefined
       if (hasExistingContent) {
         // Pass the current YAML as context for refinement
         currentPlan = { _yaml: currentYaml }
@@ -196,8 +196,9 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       }
 
       // Check for clarification
-      if ((result as any).needs_clarification && (result as any).clarification_message) {
-        assistantEntry.content = (result as any).clarification_message
+      const resultWithClarification = result as unknown as { needs_clarification?: boolean; clarification_message?: string }
+      if (resultWithClarification.needs_clarification && resultWithClarification.clarification_message) {
+        assistantEntry.content = resultWithClarification.clarification_message
         setConversation(prev => [...prev, assistantEntry])
       } else if (result.success && result.yaml) {
         assistantEntry.content = 'Procedure generated successfully.'
@@ -215,15 +216,16 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
         setConversation(prev => [...prev, assistantEntry])
         onError?.(errorMsg + validationInfo)
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Failed to generate procedure'
       const errorEntry: ConversationEntry = {
         role: 'assistant',
-        content: err.message || 'Failed to generate procedure',
+        content: errMsg,
         timestamp: Date.now(),
         progressLog: [...currentProgressLog],
       }
       setConversation(prev => [...prev, errorEntry])
-      onError?.(err.message || 'Failed to generate procedure')
+      onError?.(errMsg)
     } finally {
       setIsGenerating(false)
       setCurrentPhase('')

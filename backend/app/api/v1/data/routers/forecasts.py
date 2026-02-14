@@ -46,7 +46,7 @@ from app.core.shared.forecast_service import forecast_service
 from app.core.shared.forecast_sync_service import forecast_sync_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import forecast_sync_task
-from app.dependencies import get_current_org_id, get_current_user, require_data_source_enabled, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin, require_data_source_enabled
 
 # Initialize router
 router = APIRouter(
@@ -230,7 +230,7 @@ async def list_syncs(
 async def create_sync(
     request: ForecastSyncCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """Create a new forecast sync."""
     # Validate source_type
@@ -290,7 +290,7 @@ async def update_sync(
     sync_id: UUID,
     request: ForecastSyncUpdateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """Update a forecast sync."""
     async with database_service.get_session() as session:
@@ -336,7 +336,7 @@ async def update_sync(
 async def delete_sync(
     sync_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """Delete a forecast sync and all associated forecasts."""
     async with database_service.get_session() as session:
@@ -426,7 +426,7 @@ async def trigger_sync_pull(
 async def clear_sync_forecasts(
     sync_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    _admin: User = Depends(require_org_admin_or_above),
+    _admin: User = Depends(require_admin),
 ):
     """
     Clear all forecasts for a sync (delete forecast data but keep sync config).

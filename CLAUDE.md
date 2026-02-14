@@ -35,6 +35,26 @@ Curatore v2 is a document processing and curation platform that converts documen
 4. **Database is source of truth** - Object store contains only bytes
 5. **Queue isolation** - Each job type has its own Celery queue to prevent blocking
 6. **Contract-constrained governance** - Functions expose formal JSON Schema contracts with side-effect declarations, payload profiles, and exposure policies; the AI procedure generator uses these constraints when planning workflows
+7. **Config is required, not optional** - `config.yml` is validated at startup with fail-fast; no silent fallbacks to hardcoded defaults
+
+### Configuration Convention
+
+See [Configuration](docs/CONFIGURATION.md) for the full reference.
+
+**Two files, distinct responsibilities:**
+- **`.env`** — Infrastructure & secrets: credentials, Docker container config, service endpoints within the Compose stack (Redis, MinIO, PostgreSQL), frontend build-time URLs, dev toggles
+- **`config.yml`** — Application behavior: feature flags, LLM models/routing, external service discovery (Document Service, Playwright, LLM APIs), search tuning, queue behavior, email config
+
+**Key rules when adding configuration:**
+1. `config.yml` is **required** at startup — missing or invalid config is fatal with a clear error
+2. Secrets go in `.env`, referenced by `config.yml` via `${VAR_NAME}` syntax
+3. Infrastructure endpoints (Redis, MinIO, PostgreSQL) go in `.env`
+4. External service discovery (Document Service, Playwright, LLM) goes in `config.yml` — these are independently deployed services Curatore discovers, not Docker infrastructure
+5. Never add hardcoded model fallbacks — if config is wrong, fail visibly
+
+**Legacy debt:** `backend/app/config.py` `Settings` class has ~40 fields superseded by config.yml (LLM, search, SAM, email, etc.). These are harmless but will shrink as services are extracted. Job management and quality threshold settings still live only in `.env`/Settings.
+
+**Service breakout pattern:** When a service moves to its own repo (as Playwright and Document Service already have), remove its Docker config from `.env` and keep its discovery settings in `config.yml`. Use the `connectors/adapters/` `ServiceAdapter` pattern with 3-tier config resolution.
 
 ---
 
@@ -42,15 +62,14 @@ Curatore v2 is a document processing and curation platform that converts documen
 
 See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 
-**Roles**: `admin` (system-wide, `organization_id=NULL`), `org_admin` (single org), `member` (single org), `viewer` (read-only).
+**Roles**: `admin` (system-wide, `organization_id=NULL`), `member` (org-scoped).
 
 **Key Rules**:
 - Admin users have `organization_id=NULL` — **never** use `current_user.organization_id` directly
 - Use `get_effective_org_id` for cross-org admin views, `get_current_org_id` for org-scoped operations
 - System org (`__system__`) is for CWR procedure ownership only, never for user assignment
-- Side-effect CWR functions require `org_admin+` role
 - CWR function visibility is filtered by org's enabled data sources — functions whose `required_data_sources` aren't active for the org are hidden from listings and the AI generator
-- Generation profiles are server-enforced by role (`admin` → `admin_full`, `org_admin` → `workflow_standard`, others → `safe_readonly`)
+- Generation profiles are server-enforced by role (`admin` → `admin_full`, `member` → `workflow_standard`)
 
 **Key Dependencies** (`backend/app/dependencies.py`):
 
@@ -59,8 +78,6 @@ See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 | `get_effective_org_id` | `Optional[UUID]` | Cross-org admin views; returns `None` for admin system context |
 | `get_current_org_id` | `UUID` (required) | Org-scoped operations; raises 400 if no org context |
 | `require_admin` | `User` | System admin only |
-| `require_org_admin_or_above` | `User` | `org_admin` or `admin` |
-| `require_org_admin` | `User` | `org_admin` only (NOT admin) |
 
 ---
 

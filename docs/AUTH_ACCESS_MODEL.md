@@ -7,9 +7,7 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 | Role | Scope | Organization | Data Access | CWR Functions | Procedures | System Config |
 |------|-------|-------------|-------------|---------------|------------|---------------|
 | `admin` | System-wide | `organization_id=NULL`, accesses orgs via `X-Organization-Id` header | All orgs (cross-org in system context, filtered in org context) | All (including side-effect tools); system context sees all tools regardless of data sources | Full CRUD + `admin_full` generation profile + system procedures | Full (services, connections, LLM, orgs) |
-| `org_admin` | Single org | `organization_id=<org_uuid>` | Own org only | All except org_admin-blocked tools; filtered by org's enabled data sources | Full CRUD + `workflow_standard` generation profile | Org-level settings only |
-| `member` | Single org | `organization_id=<org_uuid>` | Own org only | Read-only (no side-effect tools); filtered by org's enabled data sources | Run only (cannot create/edit) | None |
-| `viewer` | Single org | `organization_id=<org_uuid>` | Own org read-only | Read-only (no side-effect tools); filtered by org's enabled data sources | View only | None |
+| `member` | Single org | `organization_id=<org_uuid>` | Own org only | All (including side-effect tools); filtered by org's enabled data sources | Run + `workflow_standard` generation profile | None |
 
 ---
 
@@ -34,8 +32,6 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 | `get_current_org_id` | `UUID` (required) | Org-scoped data operations. Raises 400 if no org context available. |
 | `get_current_user` | `User` | Authenticated user object. |
 | `require_admin` | `User` | System admin only (raises 403 otherwise). |
-| `require_org_admin_or_above` | `User` | `org_admin` or `admin` role (raises 403 otherwise). |
-| `require_org_admin` | `User` | `org_admin` only — NOT admin (raises 403 otherwise). |
 
 **Implementation rule**: ALWAYS use `get_current_org_id` or `get_effective_org_id` — NEVER `current_user.organization_id` directly.
 
@@ -56,8 +52,7 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 
 ### Function Execution
 - **Org data source filtering**: Functions that declare `required_data_sources` are hidden from orgs that haven't enabled those sources (404 on detail, excluded from listings). System context (`org_id=None`) sees all.
-- **Side-effect gating**: Functions with `side_effects=True` require `org_admin` or `admin` role
-- Non-privileged users (member, viewer) receive 403 when attempting to execute side-effect functions
+- **Side-effect tools**: All authenticated users can execute side-effect functions. No role gate is applied.
 - Runtime execution also checks `required_data_sources` as defense-in-depth (403 if disabled)
 
 ### Generation Profiles
@@ -66,8 +61,7 @@ Profiles are server-enforced by role when generating procedures via AI:
 | Role | Max Profile | Description |
 |------|-------------|-------------|
 | `admin` | `admin_full` | All tools available including dangerous/destructive |
-| `org_admin` | `workflow_standard` | Standard workflow tools (excludes webhook, bulk updates) |
-| `member` / `viewer` | `safe_readonly` | Read-only tools only |
+| `member` | `workflow_standard` | Standard workflow tools (excludes webhook, bulk updates) |
 
 If a user requests a profile above their cap, the server silently downgrades to their maximum.
 
@@ -140,7 +134,7 @@ async def create_api_key(
 2. Use `get_effective_org_id` (`Optional`) for cross-org admin views (ops dashboards, metrics)
 3. Use `get_current_org_id` (required) for org-scoped data operations (create, update, delete)
 4. Admin access checks: `if user.role != "admin" and resource.organization_id != org_id`
-5. Side-effect functions: require `org_admin` or `admin` role
+5. Side-effect functions: available to all authenticated users
 6. System procedure editing: require `admin` role
 7. Registration: exclude `__system__` org from default org selection
 8. Role demotion: when demoting from `admin`, require an org context for the new assignment

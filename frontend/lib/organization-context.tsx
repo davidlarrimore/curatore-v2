@@ -90,7 +90,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
       const response = await organizationsApi.listOrganizations(token)
       // Filter out the reserved system org (belt-and-suspenders — backend also filters)
       const orgs = (response.organizations || []).filter(
-        (o: any) => o.slug !== '__system__'
+        (o: { slug: string }) => o.slug !== '__system__'
       )
       setAvailableOrganizations(orgs)
     } catch (error) {

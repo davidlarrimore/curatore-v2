@@ -3,7 +3,7 @@ import * as yaml from 'js-yaml'
 /**
  * Clean parameters by removing undefined, null, empty string, and empty array values.
  */
-function cleanParams(params: Record<string, any>): Record<string, any> {
+function cleanParams(params: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(params).filter(([_, v]) => {
       if (v === undefined || v === null) return false
@@ -20,12 +20,12 @@ function cleanParams(params: Record<string, any>): Record<string, any> {
  */
 export function generateFunctionJson(
   functionName: string,
-  params: Record<string, any>,
+  params: Record<string, unknown>,
   stepName?: string
 ): string {
   const cleaned = cleanParams(params)
 
-  const step: Record<string, any> = {
+  const step: Record<string, unknown> = {
     name: stepName || functionName.replace(/_/g, '-'),
     function: functionName,
   }
@@ -43,7 +43,7 @@ export function generateFunctionJson(
 export function generateProcedureJson(
   name: string,
   description: string,
-  steps: Array<{ name: string; function: string; params?: Record<string, any> }>
+  steps: Array<{ name: string; function: string; params?: Record<string, unknown> }>
 ): string {
   const procedure = {
     name,
@@ -69,12 +69,12 @@ export function generateProcedureJson(
  */
 export function generateFunctionYaml(
   functionName: string,
-  params: Record<string, any>,
+  params: Record<string, unknown>,
   stepName?: string
 ): string {
   const cleaned = cleanParams(params)
 
-  const step: Record<string, any> = {
+  const step: Record<string, unknown> = {
     name: stepName || functionName.replace(/_/g, '-'),
     function: functionName,
   }
@@ -98,7 +98,7 @@ export function generateFunctionYaml(
 export function generateProcedureYaml(
   name: string,
   description: string,
-  steps: Array<{ name: string; function: string; params?: Record<string, any> }>
+  steps: Array<{ name: string; function: string; params?: Record<string, unknown> }>
 ): string {
   const procedure = {
     name,

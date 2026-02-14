@@ -7,9 +7,82 @@ Curatore v2 supports two configuration methods:
 2. **Environment Variables** (legacy): `.env` file
 
 **Configuration Priority:**
-1. config.yml (if present)
-2. Environment variables from .env
+1. config.yml (required at startup — validated with fail-fast)
+2. Environment variables from .env (for infrastructure/secrets)
 3. Built-in defaults
+
+---
+
+## Configuration Convention
+
+Curatore uses two configuration files with distinct responsibilities:
+
+### `.env` — Infrastructure & Secrets
+
+Settings that change per deployment environment. These answer "where does this run?" and "how do I authenticate?"
+
+| Category | Examples |
+|---|---|
+| **Credentials & secrets** | `OPENAI_API_KEY`, `JWT_SECRET_KEY`, `MINIO_ACCESS_KEY`, `MS_CLIENT_SECRET`, `SAM_API_KEY`, `SMTP_PASSWORD`, service API keys |
+| **Infrastructure endpoints** | `DATABASE_URL`, `MINIO_ENDPOINT`, `MINIO_SECURE`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` |
+| **Docker container config** | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` |
+| **Docker compose profiles** | `ENABLE_POSTGRES_SERVICE`, `ENABLE_DOCLING_SERVICE`, `ENABLE_TIKA_SERVICE` |
+| **Frontend build-time URLs** | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_EXTRACTION_URL` |
+| **Dev toggles** | `DEBUG`, `CORS_ORIGINS` |
+| **One-time seed data** | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `DEFAULT_ORG_SLUG` |
+
+### `config.yml` — Application Behavior
+
+Settings that define what the application does. These answer "how should the app behave?" and "which external services does it use?"
+
+| Category | Examples |
+|---|---|
+| **Feature flags** | `enable_auth` |
+| **LLM configuration** | Provider, models, task types, temperatures |
+| **External service discovery** | Document Service URL/engine config, Playwright URL/settings |
+| **Search behavior** | Mode, semantic weight, chunk size, batch size |
+| **Queue behavior** | Per-queue overrides (concurrency, timeouts) |
+| **Email behavior** | Backend, sender name/address |
+| **Integration settings** | SAM.gov rate limits, page sizes; MinIO bucket names |
+
+### Key Rules
+
+1. **`config.yml` is required at startup.** If it's missing or fails validation, the backend refuses to start with a clear error message. No silent fallback to defaults.
+2. **Secrets belong in `.env`, referenced by `config.yml` via `${VAR_NAME}`.** Never hardcode credentials in config.yml (config.yml.example shows the `${VAR}` pattern).
+3. **Infrastructure endpoints belong in `.env`** when they refer to services within the Docker Compose stack (Redis, MinIO, PostgreSQL).
+4. **External service discovery belongs in `config.yml`** for services deployed independently (Document Service, Playwright, LLM APIs). These URLs define which services this Curatore instance uses, not where Docker containers run.
+5. **No hardcoded model fallbacks.** If LLM config is missing, the system raises an error instead of silently falling back to a wrong model.
+
+### Bridging: `${VAR_NAME}` References
+
+`config.yml` can reference `.env` values using `${VAR_NAME}` or `${VAR_NAME:-default}` syntax. This keeps secrets in `.env` while keeping the structured config in YAML:
+
+```yaml
+llm:
+  api_key: ${OPENAI_API_KEY}       # Secret from .env
+  base_url: https://api.openai.com/v1  # App-level choice, not a secret
+
+minio:
+  endpoint: minio:9000             # Infrastructure — should use ${MINIO_ENDPOINT}
+  access_key: ${MINIO_ACCESS_KEY}  # Secret from .env
+  bucket_uploads: curatore-uploads  # App-level naming
+```
+
+### Service Breakout Migration Pattern
+
+Curatore is progressively breaking services into independent repos. The Playwright service and Document Service (formerly extraction-service) have already been extracted. When a service gets broken out:
+
+1. **Remove its infrastructure settings from `.env`** — Docker container config, service-specific env vars for that container
+2. **Keep its discovery settings in `config.yml`** — service URL, API key reference, timeouts, behavior settings. These become the interface definition for how Curatore discovers and uses the external service.
+3. **Use the `connectors/adapters/` pattern** — Create a `ServiceAdapter` subclass with 3-tier config resolution: DB Connection → config.yml → env var fallback.
+
+**Already extracted:** Document Service (`extraction.engines[]`), Playwright (`playwright` section)
+
+**Current legacy debt:** The `Settings` class in `backend/app/config.py` still contains ~40 fields that are fully superseded by `config.yml` sections (LLM, search, SAM, email, extraction, playwright). These are harmless (config.yml takes priority) but will be cleaned up as services are extracted. Additionally, job management settings (`DEFAULT_JOB_CONCURRENCY_LIMIT`, etc.) and quality thresholds still live only in `.env`/Settings and should eventually move to `config.yml`.
+
+**Remaining infrastructure in `config.yml` that should use `${VAR}` references:**
+- `queue.broker_url` / `queue.result_backend` — Redis connection strings
+- `minio.endpoint` / `minio.secure` — MinIO infrastructure settings
 
 ---
 
@@ -47,6 +120,20 @@ This generates `config.yml` from your `.env` settings with proper structure and 
 ---
 
 ## Configuration Reference
+
+### Authentication
+
+Controls whether JWT/API-key authentication is enforced on all endpoints.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enable_auth` | bool | `false` | `true` = all requests require Bearer token or X-API-Key. `false` = bypass auth, treat every request as the default admin user. |
+
+Set to `true` for any shared or production environment. `false` is only for local development and initial setup.
+
+```yaml
+enable_auth: true
+```
 
 ### Database
 
@@ -585,6 +672,6 @@ For questions or issues:
 
 ---
 
-**Last Updated**: 2026-01-16
+**Last Updated**: 2026-02-14
 
-**Version**: Curatore v2.1.0 (Phase 9: YAML Configuration System)
+**Version**: Curatore v2.1.0

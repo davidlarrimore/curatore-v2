@@ -49,8 +49,8 @@ export default function BulkUploadModal({
           setAnalysis(result)
           setStep('preview')
         })
-        .catch((err: any) => {
-          setError(err.message || 'Failed to analyze upload')
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : 'Failed to analyze upload')
           setStep('select')
         })
         .finally(() => {
@@ -80,8 +80,8 @@ export default function BulkUploadModal({
       const result = await assetsApi.previewBulkUpload(token, selectedFiles)
       setAnalysis(result)
       setStep('preview')
-    } catch (err: any) {
-      setError(err.message || 'Failed to analyze upload')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to analyze upload')
     } finally {
       setIsAnalyzing(false)
     }
@@ -100,8 +100,8 @@ export default function BulkUploadModal({
         handleClose()
         onSuccess?.()
       }, 2000)
-    } catch (err: any) {
-      setError(err.message || 'Failed to apply upload')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to apply upload')
     } finally {
       setIsApplying(false)
     }

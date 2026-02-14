@@ -841,7 +841,7 @@ export default function FunctionLabPage() {
                       </p>
                       {func.output_schema.fields && func.output_schema.fields.length > 0 && (
                         <div className="mt-3 space-y-2">
-                          {func.output_schema.fields.map((field) => (
+                          {(func.output_schema.fields as Array<{ name: string; type: string; nullable?: boolean }>).map((field) => (
                             <div key={field.name} className="flex items-start gap-2 text-xs">
                               <code className="font-mono text-indigo-600 dark:text-indigo-400 flex-shrink-0">
                                 .{field.name}
@@ -859,7 +859,7 @@ export default function FunctionLabPage() {
                     {/* Output Variants */}
                     {func.output_variants && func.output_variants.length > 0 && (
                       <div className="mt-4 space-y-3">
-                        {func.output_variants.map((variant, idx) => (
+                        {(func.output_variants as Array<{ mode: string; condition: string; schema: { type: string } }>).map((variant, idx) => (
                           <div key={idx} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700">
                             <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                               {variant.mode} mode

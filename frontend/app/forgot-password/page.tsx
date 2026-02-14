@@ -18,8 +18,8 @@ export default function ForgotPasswordPage() {
     try {
       await authApi.forgotPassword(email)
       setSubmitted(true)
-    } catch (err: any) {
-      setError(err.message || 'Something went wrong. Please try again.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
       setIsLoading(false)
     }

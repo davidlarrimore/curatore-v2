@@ -87,39 +87,29 @@ class EmbeddingService:
 
     def _get_config(self):
         """Get embedding configuration from config_loader."""
-        try:
-            from app.core.shared.config_loader import config_loader
-            return config_loader.get_llm_config()
-        except Exception:
-            return None
+        from app.core.shared.config_loader import config_loader
+        return config_loader.get_llm_config()
 
     def _get_model_name(self) -> str:
-        """Get the embedding model name from config or default."""
+        """Get the embedding model name from config."""
         if self._model_name:
             return self._model_name
 
-        try:
-            from app.core.shared.config_loader import config_loader
-            self._model_name = config_loader.get_embedding_model()
-        except Exception:
-            self._model_name = self.DEFAULT_MODEL
-
+        from app.core.shared.config_loader import config_loader
+        self._model_name = config_loader.get_embedding_model()
         return self._model_name
 
     def _get_configured_dimensions(self) -> Optional[int]:
         """Get explicitly configured embedding dimensions from config, or None."""
         if hasattr(self, '_configured_dimensions') and self._configured_dimensions is not None:
             return self._configured_dimensions
-        try:
-            from app.core.shared.config_loader import config_loader
-            llm_config = config_loader.get_llm_config()
-            if llm_config and llm_config.task_types:
-                embedding_config = llm_config.task_types.get("embedding")
-                if embedding_config and embedding_config.dimensions is not None:
-                    self._configured_dimensions = embedding_config.dimensions
-                    return self._configured_dimensions
-        except Exception:
-            pass
+        from app.core.shared.config_loader import config_loader
+        llm_config = config_loader.get_llm_config()
+        if llm_config and llm_config.task_types:
+            embedding_config = llm_config.task_types.get("embedding")
+            if embedding_config and embedding_config.dimensions is not None:
+                self._configured_dimensions = embedding_config.dimensions
+                return self._configured_dimensions
         return None
 
     def _embedding_kwargs(self, model: str, input_data) -> dict:

@@ -49,10 +49,10 @@ type TabId = 'organization' | 'user' | 'users' | 'connections'
 export default function OrgSettingsPage() {
   const { token, user } = useAuth()
   const { organization, isLoading: orgLoading } = useOrgUrl()
-  const [orgSettings, setOrgSettings] = useState<Record<string, any>>({})
-  const [userSettings, setUserSettings] = useState<Record<string, any>>({})
-  const [editedOrgSettings, setEditedOrgSettings] = useState<Record<string, any>>({})
-  const [editedUserSettings, setEditedUserSettings] = useState<Record<string, any>>({})
+  const [orgSettings, setOrgSettings] = useState<Record<string, unknown>>({})
+  const [userSettings, setUserSettings] = useState<Record<string, unknown>>({})
+  const [editedOrgSettings, setEditedOrgSettings] = useState<Record<string, unknown>>({})
+  const [editedUserSettings, setEditedUserSettings] = useState<Record<string, unknown>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
@@ -117,8 +117,8 @@ export default function OrgSettingsPage() {
       let userData = { settings: {} }
       try {
         userData = await settingsApi.getUserSettings(token)
-      } catch (userErr: any) {
-        console.warn('User settings not available:', userErr.message)
+      } catch (userErr: unknown) {
+        console.warn('User settings not available:', userErr instanceof Error ? userErr.message : String(userErr))
       }
 
       setOrgSettings(orgData.settings || {})
@@ -139,9 +139,9 @@ export default function OrgSettingsPage() {
       } else {
         setAvailableEngines([])
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load settings:', err)
-      setError(err.message || 'Failed to load settings')
+      setError(err instanceof Error ? err.message : 'Failed to load settings')
     } finally {
       setIsLoading(false)
     }
@@ -152,8 +152,8 @@ export default function OrgSettingsPage() {
     try {
       const response = await usersApi.listUsers(token)
       setUsers(response.users)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load users')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load users')
     }
   }
 
@@ -173,8 +173,8 @@ export default function OrgSettingsPage() {
     try {
       await usersApi.updateUser(token, userId, { is_active: !isActive })
       await loadUsers()
-    } catch (err: any) {
-      alert(`Failed to update user: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to update user: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -184,15 +184,15 @@ export default function OrgSettingsPage() {
     try {
       await usersApi.deleteUser(token, userId)
       await loadUsers()
-    } catch (err: any) {
-      alert(`Failed to delete user: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to delete user: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   const getRoleBadgeVariant = (role: string): 'default' | 'secondary' | 'success' | 'warning' | 'error' | 'info' => {
     switch (role) {
       case 'admin': return 'error'
-      case 'user': return 'info'
+      case 'member': return 'info'
       default: return 'secondary'
     }
   }
@@ -205,8 +205,8 @@ export default function OrgSettingsPage() {
       await settingsApi.updateOrganizationSettings(token, editedOrgSettings)
       setOrgSettings(editedOrgSettings)
       alert('Organization settings saved successfully!')
-    } catch (err: any) {
-      setError(err.message || 'Failed to save organization settings')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save organization settings')
     } finally {
       setIsSaving(false)
     }
@@ -220,18 +220,18 @@ export default function OrgSettingsPage() {
       await settingsApi.updateUserSettings(token, editedUserSettings)
       setUserSettings(editedUserSettings)
       alert('User settings saved successfully!')
-    } catch (err: any) {
-      setError(err.message || 'Failed to save user settings')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save user settings')
     } finally {
       setIsSaving(false)
     }
   }
 
-  const handleOrgSettingChange = (key: string, value: any) => {
+  const handleOrgSettingChange = (key: string, value: string | number | boolean) => {
     setEditedOrgSettings(prev => ({ ...prev, [key]: value }))
   }
 
-  const handleUserSettingChange = (key: string, value: any) => {
+  const handleUserSettingChange = (key: string, value: string | number | boolean) => {
     setEditedUserSettings(prev => ({ ...prev, [key]: value }))
   }
 
@@ -248,8 +248,8 @@ export default function OrgSettingsPage() {
       setOrgSettings(updatedSettings)
       setEditedOrgSettings(updatedSettings)
       alert('Default extraction engine saved successfully!')
-    } catch (err: any) {
-      setError(err.message || 'Failed to save extraction engine')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save extraction engine')
     } finally {
       setIsSaving(false)
     }
@@ -269,8 +269,8 @@ export default function OrgSettingsPage() {
       setOrgSlug(updated.slug || '')
       setOrgDetailsSaved(true)
       setTimeout(() => setOrgDetailsSaved(false), 3000)
-    } catch (err: any) {
-      setOrgDetailsError(err.message || 'Failed to save organization details')
+    } catch (err: unknown) {
+      setOrgDetailsError(err instanceof Error ? err.message : 'Failed to save organization details')
     } finally {
       setIsSavingOrgDetails(false)
     }
@@ -282,11 +282,8 @@ export default function OrgSettingsPage() {
     return { ...orgSettings, ...userSettings }
   }
 
-  const renderSettingField = (key: string, value: any, onChange: (key: string, value: any) => void) => {
-    const isNumber = typeof value === 'number'
-    const isBoolean = typeof value === 'boolean'
-
-    if (isBoolean) {
+  const renderSettingField = (key: string, value: unknown, onChange: (key: string, value: string | number | boolean) => void) => {
+    if (typeof value === 'boolean') {
       return (
         <label className="flex items-center space-x-2">
           <input
@@ -300,6 +297,8 @@ export default function OrgSettingsPage() {
       )
     }
 
+    const isNumber = typeof value === 'number'
+
     return (
       <div>
         <label htmlFor={key} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -308,7 +307,7 @@ export default function OrgSettingsPage() {
         <input
           id={key}
           type={isNumber ? 'number' : 'text'}
-          value={value}
+          value={isNumber ? value : String(value ?? '')}
           onChange={(e) => onChange(key, isNumber ? Number(e.target.value) : e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         />

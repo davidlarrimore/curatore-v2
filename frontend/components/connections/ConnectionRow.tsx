@@ -6,14 +6,14 @@ interface Connection {
   id: string
   name: string
   connection_type: string
-  config: Record<string, any>
+  config: Record<string, unknown>
   is_default: boolean
   is_active: boolean
   is_managed?: boolean
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
-  test_result?: Record<string, any> | null
+  test_result?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -113,13 +113,15 @@ export default function ConnectionRow({
     const { connection_type, config } = connection
 
     if (connection_type === 'microsoft_graph') {
-      const tenant = config.tenant_id ? `${config.tenant_id.substring(0, 8)}...` : ''
+      const tenantId = typeof config.tenant_id === 'string' ? config.tenant_id : ''
+      const tenant = tenantId ? `${tenantId.substring(0, 8)}...` : ''
       return tenant ? `Tenant: ${tenant}` : 'Not configured'
     }
 
     if (connection_type === 'extraction') {
-      const engineType = config.engine_type || 'unknown'
-      const url = config.service_url?.replace(/^https?:\/\//, '') || ''
+      const engineType = typeof config.engine_type === 'string' ? config.engine_type : 'unknown'
+      const serviceUrl = typeof config.service_url === 'string' ? config.service_url : ''
+      const url = serviceUrl ? serviceUrl.replace(/^https?:\/\//, '') : ''
       return `${engineType}${url ? ` @ ${url}` : ''}`
     }
 

@@ -765,6 +765,10 @@ class AppConfig(BaseModel):
         default="2.0",
         description="Configuration file version"
     )
+    enable_auth: bool = Field(
+        default=False,
+        description="Enable JWT/API-key authentication on all endpoints"
+    )
     database: Optional[DatabaseConfig] = Field(
         default=None,
         description="Primary PostgreSQL database configuration"

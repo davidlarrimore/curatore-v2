@@ -92,9 +92,9 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
       ])
       setTasks(tasksData.tasks)
       setStats(statsData)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load maintenance data:', err)
-      onError?.(err.message || 'Failed to load maintenance data')
+      onError?.(err instanceof Error ? err.message : 'Failed to load maintenance data')
     } finally {
       setIsLoading(false)
     }
@@ -111,7 +111,7 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
     try {
       const runsData = await scheduledTasksApi.getTaskRuns(token, taskId, 10)
       setTaskRuns(prev => ({ ...prev, [taskId]: runsData.runs }))
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load task runs:', err)
     } finally {
       setLoadingRuns(prev => ({ ...prev, [taskId]: false }))
@@ -140,9 +140,9 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
         await scheduledTasksApi.enableTask(token, task.id)
       }
       await loadData()
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to toggle task:', err)
-      onError?.(err.message || 'Failed to toggle task')
+      onError?.(err instanceof Error ? err.message : 'Failed to toggle task')
     } finally {
       setActionLoading(null)
     }
@@ -167,14 +167,14 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
 
   const handleReindexConfirm = async () => {
     if (!reindexDialogTask) return
-    const overrides: Record<string, any> = {}
+    const overrides: Record<string, unknown> = {}
     if (reindexConfig.force) overrides.force = true
     if (reindexConfig.data_sources.length < 4) overrides.data_sources = reindexConfig.data_sources
     setReindexDialogTask(null)
     await executeTrigger(reindexDialogTask, Object.keys(overrides).length > 0 ? overrides : undefined)
   }
 
-  const executeTrigger = async (task: ScheduledTask, configOverrides?: Record<string, any>) => {
+  const executeTrigger = async (task: ScheduledTask, configOverrides?: Record<string, unknown>) => {
     if (!token) return
 
     setActionLoading(task.id)
@@ -191,9 +191,9 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
       // Refresh runs for this task and expand to show the new run
       setExpandedTask(task.id)
       await loadTaskRuns(task.id)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to trigger task:', err)
-      onError?.(err.message || 'Failed to trigger task')
+      onError?.(err instanceof Error ? err.message : 'Failed to trigger task')
     } finally {
       setActionLoading(null)
     }

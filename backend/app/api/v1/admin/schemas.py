@@ -279,7 +279,7 @@ class UserResponse(BaseModel):
     email: str = Field(..., description="Email address")
     username: str = Field(..., description="Username")
     full_name: Optional[str] = Field(None, description="Full name")
-    role: str = Field(..., description="Role (org_admin, member, viewer)")
+    role: str = Field(..., description="Role (admin, member)")
     is_active: bool = Field(..., description="Whether user is active")
     is_verified: bool = Field(..., description="Whether email is verified")
     created_at: datetime = Field(..., description="Creation timestamp")
@@ -315,7 +315,7 @@ class UserInviteRequest(BaseModel):
     email: EmailStr = Field(..., description="Email address")
     username: str = Field(..., min_length=3, max_length=100, description="Username")
     full_name: Optional[str] = Field(None, max_length=255, description="Full name")
-    role: str = Field(default="member", description="Role (org_admin, member, viewer)")
+    role: str = Field(default="member", description="Role (admin, member)")
     send_email: bool = Field(default=False, description="Send invitation email to user")
 
     class Config:
@@ -333,13 +333,13 @@ class UserInviteRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     """Request to update user details."""
     full_name: Optional[str] = Field(None, max_length=255, description="Full name")
-    role: Optional[str] = Field(None, description="Role (org_admin, member, viewer)")
+    role: Optional[str] = Field(None, description="Role (admin, member)")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "full_name": "John Smith",
-                "role": "org_admin"
+                "role": "member"
             }
         }
 
@@ -575,7 +575,7 @@ class ServiceAccountResponse(BaseModel):
     description: Optional[str] = Field(None, description="Description")
     organization_id: str = Field(..., description="Organization UUID")
     organization_name: Optional[str] = Field(None, description="Organization name")
-    role: str = Field(..., description="Role (member, viewer)")
+    role: str = Field(..., description="Role (member)")
     is_active: bool = Field(..., description="Whether account is active")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
@@ -602,14 +602,14 @@ class ServiceAccountCreateRequest(BaseModel):
     """Request to create a new service account."""
     name: str = Field(..., min_length=1, max_length=255, description="Service account name")
     description: Optional[str] = Field(None, max_length=500, description="Description")
-    role: str = Field(default="member", description="Role (member, viewer)")
+    role: str = Field(default="member", description="Role (member)")
 
 
 class ServiceAccountUpdateRequest(BaseModel):
     """Request to update a service account."""
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Service account name")
     description: Optional[str] = Field(None, max_length=500, description="Description")
-    role: Optional[str] = Field(None, description="Role (member, viewer)")
+    role: Optional[str] = Field(None, description="Role (member)")
     is_active: Optional[bool] = Field(None, description="Whether account is active")
 
 
@@ -675,7 +675,7 @@ class UserAdminResponse(BaseModel):
     email: str = Field(..., description="Email address")
     username: str = Field(..., description="Username")
     full_name: Optional[str] = Field(None, description="Full name")
-    role: str = Field(..., description="Role (admin, org_admin, member, viewer)")
+    role: str = Field(..., description="Role (admin, member)")
     organization_id: Optional[str] = Field(None, description="Organization UUID (null for admins)")
     organization_name: Optional[str] = Field(None, description="Organization name")
     is_active: bool = Field(..., description="Whether user is active")
@@ -695,7 +695,7 @@ class UserAdminCreateRequest(BaseModel):
     email: EmailStr = Field(..., description="Email address")
     username: str = Field(..., min_length=3, max_length=100, description="Username")
     full_name: Optional[str] = Field(None, max_length=255, description="Full name")
-    role: str = Field(default="member", description="Role (admin, org_admin, member, viewer)")
+    role: str = Field(default="member", description="Role (admin, member)")
     organization_id: Optional[str] = Field(None, description="Organization UUID (required for non-admin users)")
     send_email: bool = Field(default=False, description="Send invitation email")
 
@@ -708,7 +708,7 @@ class UserAdminCreateRequest(BaseModel):
 class RoleResponse(BaseModel):
     """Role details response."""
     id: int = Field(..., description="Role ID")
-    name: str = Field(..., description="Role identifier (admin, org_admin, member, viewer)")
+    name: str = Field(..., description="Role identifier (admin, member)")
     display_name: str = Field(..., description="Human-readable role name")
     description: Optional[str] = Field(None, description="Role description")
     is_system_role: bool = Field(..., description="True for system-wide roles (admin)")
@@ -721,9 +721,9 @@ class RoleResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "id": 1,
-                "name": "org_admin",
-                "display_name": "Org Admin",
-                "description": "Organization administrator",
+                "name": "member",
+                "display_name": "Member",
+                "description": "Organization member with data access and CWR tool usage",
                 "is_system_role": False,
                 "can_manage_users": True,
                 "can_manage_org": True,

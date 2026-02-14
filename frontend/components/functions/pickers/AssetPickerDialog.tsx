@@ -180,7 +180,7 @@ export function AssetPickerDialog({
         }
       } else {
         // No query — show recent assets via listing endpoint
-        const params: Record<string, any> = {
+        const params: Record<string, string | number> = {
           status: 'ready',
           limit,
           offset,
@@ -192,11 +192,12 @@ export function AssetPickerDialog({
           setTotal(result.total)
         }
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError' || ac.signal.aborted) return
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return
+      if (ac.signal.aborted) return
       console.error('[AssetPicker] search error:', err)
       if (!ac.signal.aborted) {
-        setError(err.message || 'Failed to load assets')
+        setError(err instanceof Error ? err.message : 'Failed to load assets')
         setItems([])
         setTotal(0)
       }

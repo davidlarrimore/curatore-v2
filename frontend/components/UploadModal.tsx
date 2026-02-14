@@ -107,8 +107,8 @@ export default function UploadModal({
       const result = await assetsApi.previewBulkUpload(token, selectedFiles)
       setAnalysis(result)
       setStep('preview')
-    } catch (err: any) {
-      setError(err.message || 'Failed to analyze files. Please try again.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to analyze files. Please try again.')
     } finally {
       setIsAnalyzing(false)
     }
@@ -139,8 +139,8 @@ export default function UploadModal({
         handleClose()
         onSuccess?.()
       }, 1500)
-    } catch (err: any) {
-      setError(err.message || 'Failed to upload files. Please try again.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to upload files. Please try again.')
       setStep('preview')
     } finally {
       setIsUploading(false)

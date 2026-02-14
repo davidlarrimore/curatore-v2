@@ -6,7 +6,9 @@ import { AlertCircle, Check } from 'lucide-react'
 
 interface JsonInputProps {
   param: FunctionParameter
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   value: Record<string, any> | undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onChange: (value: Record<string, any> | undefined) => void
   disabled?: boolean
 }

@@ -748,8 +748,7 @@ CWR functions and procedures enforce role-based access control:
 
 **Function Execution:**
 - Authenticated users can list and view function metadata (filtered by org's enabled data sources)
-- Functions with `side_effects=True` require `org_admin` or `admin` role
-- Non-privileged users (`member`, `viewer`) receive 403 when attempting side-effect functions
+- All authenticated users can execute functions, including those with `side_effects=True`
 
 **Procedure Creation & Editing:**
 - Creating/editing procedures requires authentication
@@ -761,8 +760,7 @@ CWR functions and procedures enforce role-based access control:
 | Role | Max Profile | Available Tools |
 |------|-------------|-----------------|
 | `admin` | `admin_full` | All tools including destructive |
-| `org_admin` | `workflow_standard` | Standard workflow tools |
-| `member` / `viewer` | `safe_readonly` | Read-only tools only |
+| `member` | `workflow_standard` | Standard workflow tools |
 
 Profiles are server-enforced — if a user requests a profile above their cap, it is silently downgraded.
 

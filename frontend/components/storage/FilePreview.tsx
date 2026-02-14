@@ -132,9 +132,9 @@ export default function FilePreview({ blob, filename, contentType }: FilePreview
       else {
         setError(`Preview not supported for .${extension} files`)
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Preview error:', err)
-      setError(err.message || 'Failed to load preview')
+      setError(err instanceof Error ? err.message : 'Failed to load preview')
     } finally {
       setIsLoading(false)
     }
@@ -240,6 +240,7 @@ export default function FilePreview({ blob, filename, contentType }: FilePreview
           remarkPlugins={[remarkGfm]}
           components={{
             // Customize code blocks
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             code({ node, inline, className, children, ...props }: any) {
               return inline ? (
                 <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-sm" {...props}>

@@ -148,7 +148,7 @@ class TestAccessTokenGeneration:
         """Test creating access token with specific role."""
         user_id = "user-123"
         org_id = "org-456"
-        role = "org_admin"
+        role = "member"
 
         token = auth_service_instance.create_access_token(
             user_id=user_id,

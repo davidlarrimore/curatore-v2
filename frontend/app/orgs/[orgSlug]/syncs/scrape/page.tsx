@@ -49,7 +49,7 @@ export default function ScrapeCollectionsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
 
-  const isAdmin = user?.role === 'org_admin' || user?.role === 'admin'
+  const isAdmin = user?.role === 'admin'
 
   // Helper to build org-scoped URLs
   const orgUrl = (path: string) => `/orgs/${orgSlug}${path}`
@@ -399,7 +399,7 @@ export default function ScrapeCollectionsPage() {
           <div className="text-center py-12">
             <Search className="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
             <p className="text-gray-500 dark:text-gray-400">
-              No websites match "{searchQuery}"
+              No websites match &quot;{searchQuery}&quot;
             </p>
           </div>
         )}
@@ -658,7 +658,7 @@ function AddWebsiteModal({
               )}
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              We'll automatically detect the website name
+              We&apos;ll automatically detect the website name
             </p>
           </div>
 

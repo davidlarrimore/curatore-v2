@@ -579,7 +579,7 @@ async def browse_bucket(
 
     # Validate that non-admin users can only browse within their organization prefix
     organization_id = str(org_id)
-    if current_user.role != "org_admin" and prefix and not prefix.startswith(f"{organization_id}/"):
+    if current_user.role != "admin" and prefix and not prefix.startswith(f"{organization_id}/"):
         raise HTTPException(
             status_code=403,
             detail=f"You can only browse within your organization prefix: {organization_id}/"
@@ -587,7 +587,7 @@ async def browse_bucket(
 
     # If browsing root (empty prefix), automatically scope to user's organization for non-admins
     scoped_prefix = prefix
-    if current_user.role != "org_admin" and not prefix:
+    if current_user.role != "admin" and not prefix:
         scoped_prefix = f"{organization_id}/"
 
     try:

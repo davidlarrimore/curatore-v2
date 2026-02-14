@@ -357,9 +357,9 @@ async def generate_procedure(
     requested_profile = request.profile or "workflow_standard"
     profile_caps = {
         "admin": "admin_full",
-        "org_admin": "workflow_standard",
+        "member": "workflow_standard",
     }
-    max_profile = profile_caps.get(current_user.role, "safe_readonly")
+    max_profile = profile_caps.get(current_user.role, "workflow_standard")
     profile_order = ["safe_readonly", "workflow_standard", "admin_full"]
     if profile_order.index(requested_profile) > profile_order.index(max_profile):
         requested_profile = max_profile

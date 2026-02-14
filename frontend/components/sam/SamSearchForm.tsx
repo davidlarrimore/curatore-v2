@@ -265,9 +265,9 @@ export default function SamSearchForm({
       console.log('[SamSearchForm] handleTest: Setting results:', { results, total })
       setTestResults(results)
       setTestTotal(total)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[SamSearchForm] handleTest: Error:', err)
-      setError(err.message || 'Failed to test search')
+      setError(err instanceof Error ? err.message : 'Failed to test search')
     } finally {
       setIsTesting(false)
     }
@@ -298,8 +298,8 @@ export default function SamSearchForm({
       }
 
       onSuccess()
-    } catch (err: any) {
-      setError(err.message || 'Failed to save search')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save search')
     } finally {
       setIsLoading(false)
     }

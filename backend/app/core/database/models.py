@@ -147,7 +147,7 @@ class Role(Base):
 
     Attributes:
         id: Auto-incrementing primary key
-        name: Unique role identifier (admin, org_admin, member, viewer)
+        name: Unique role identifier (admin, member)
         display_name: Human-readable role name
         description: Role description
         is_system_role: True for system-wide roles (admin)
@@ -159,9 +159,7 @@ class Role(Base):
 
     Default Roles:
         - admin: System-wide administrator (is_system_role=True)
-        - org_admin: Organization administrator
-        - member: Standard organization member
-        - viewer: Read-only organization member
+        - member: Organization member with data access and CWR tool usage
     """
 
     __tablename__ = "roles"
@@ -209,7 +207,7 @@ class User(Base):
         full_name: User's full name (optional)
         is_active: Whether user account is active
         is_verified: Whether user's email is verified
-        role: User's role (admin, org_admin, member, viewer)
+        role: User's role (admin, member)
         settings: JSONB field for user-specific settings overrides
         created_at: Timestamp when user was created
         updated_at: Timestamp of last update
@@ -217,9 +215,7 @@ class User(Base):
 
     Roles:
         - admin: System-wide admin, organization_id is NULL
-        - org_admin: Org-level admin, manages org settings and users
-        - member: Standard org member, can create/manage data
-        - viewer: Read-only org member
+        - member: Organization member with data access and CWR tool usage
 
     Relationships:
         organization: Organization this user belongs to (NULL for admins)
@@ -244,7 +240,7 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_verified = Column(Boolean, default=False, nullable=False)
 
-    # Role: admin, org_admin, member, viewer (FK to roles table)
+    # Role: admin, member (FK to roles table)
     role = Column(
         String(50),
         ForeignKey("roles.name", onupdate="CASCADE", ondelete="RESTRICT"),
@@ -4147,7 +4143,7 @@ class ServiceAccount(Base):
         name: Human-readable name (unique within org)
         description: Optional description of purpose
         organization_id: Organization this account belongs to
-        role: Account role ('member' or 'viewer')
+        role: Account role ('member')
         is_active: Whether account is active
         created_by: User who created this account
         created_at: Timestamp when account was created
@@ -4174,7 +4170,7 @@ class ServiceAccount(Base):
     organization_id = Column(
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    role = Column(String(50), nullable=False, default="member")  # member, viewer
+    role = Column(String(50), nullable=False, default="member")  # member
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(
         UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

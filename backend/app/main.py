@@ -260,6 +260,34 @@ async def startup_event() -> None:
     print(f"   Version: {settings.api_version}")
     print(f"   Debug Mode: {settings.debug}")
 
+    # ---- Validate config.yml (required — fail fast with clear message) ----
+    try:
+        from .core.shared.config_loader import config_loader
+        app_config = config_loader.get_config()
+        print(f"📄 config.yml loaded (version {app_config.version})")
+        print(f"   Authentication: {'enabled' if app_config.enable_auth else 'disabled'}")
+        if app_config.llm:
+            emb_model = config_loader.get_embedding_model()
+            print(f"   LLM: {app_config.llm.default_model} | Embedding: {emb_model}")
+        else:
+            print("   LLM: not configured (search/embedding/CWR will be unavailable)")
+        if app_config.search and app_config.search.enabled:
+            print(f"   Search: enabled (mode={app_config.search.default_mode})")
+    except FileNotFoundError as e:
+        print("=" * 60)
+        print("FATAL: config.yml not found")
+        print(f"  Searched: {e}")
+        print("  Copy config.yml.example to config.yml and configure it.")
+        print("=" * 60)
+        raise SystemExit(1)
+    except Exception as e:
+        print("=" * 60)
+        print("FATAL: config.yml failed to load")
+        print(f"  Error: {e}")
+        print("  Fix the config.yml errors above and restart.")
+        print("=" * 60)
+        raise SystemExit(1)
+
     # Log current working directory and storage configuration
     print(f"📍 Current working directory: {os.getcwd()}")
     print("📦 Object Storage Configuration:")

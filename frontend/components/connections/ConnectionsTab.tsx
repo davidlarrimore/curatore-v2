@@ -13,14 +13,14 @@ interface Connection {
   id: string
   name: string
   connection_type: string
-  config: Record<string, any>
+  config: Record<string, unknown>
   is_default: boolean
   is_active: boolean
   is_managed?: boolean
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
-  test_result?: Record<string, any> | null
+  test_result?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -123,8 +123,8 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
           testAllConnectionsHealth(response.connections)
         }, 100)
       }
-    } catch (err: any) {
-      const message = err.message || 'Failed to load connections'
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load connections'
       setError(message)
       onError?.(message)
     } finally {
@@ -168,8 +168,8 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
     try {
       await connectionsApi.deleteConnection(token, connectionId)
       await loadConnections(false)
-    } catch (err: any) {
-      alert(`Failed to delete connection: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to delete connection: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -183,8 +183,8 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
     try {
       await connectionsApi.setDefaultConnection(token, connectionId)
       await loadConnections(false)
-    } catch (err: any) {
-      alert(`Failed to set default connection: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to set default connection: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

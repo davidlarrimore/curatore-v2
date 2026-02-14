@@ -257,7 +257,7 @@ class TestDeleteEndpointValidation:
         response = client.delete(f"/api/v1/sharepoint-sync/configs/{uuid4()}")
         assert response.status_code in [401, 403, 422]  # Various auth/validation errors
 
-    @patch("app.api.v1.data.routers.sharepoint_sync.require_org_admin")
+    @patch("app.api.v1.data.routers.sharepoint_sync.require_admin")
     @patch("app.api.v1.data.routers.sharepoint_sync.database_service")
     async def test_delete_returns_run_id(self, mock_db, mock_auth, client):
         """Verify delete endpoint returns run_id for async tracking."""

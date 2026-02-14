@@ -38,7 +38,7 @@ from app.api.v1.admin.schemas import (
 from app.core.auth.auth_service import auth_service
 from app.core.database.models import Organization, PasswordResetToken, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, require_admin, require_org_admin_or_above
+from app.dependencies import get_current_org_id, require_admin
 
 # Initialize router
 router = APIRouter(prefix="/organizations/me/users", tags=["User Management"])
@@ -63,7 +63,7 @@ async def list_organization_users(
     role: str = Query(None, description="Filter by role (optional)"),
     skip: int = Query(0, ge=0, description="Number of users to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Max users to return"),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> UserListResponse:
     """
@@ -145,7 +145,7 @@ async def list_organization_users(
 )
 async def invite_user(
     request: UserInviteRequest,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> UserInviteResponse:
     """
@@ -198,7 +198,7 @@ async def invite_user(
     logger.info(f"User invite requested by {current_user.email} for {request.email}")
 
     # Validate role - admin role requires current user to be admin
-    valid_roles = ["org_admin", "member", "viewer"]
+    valid_roles = ["member"]
     if current_user.role == "admin":
         valid_roles.append("admin")
 
@@ -389,7 +389,7 @@ async def list_all_users(
 )
 async def get_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """
@@ -449,7 +449,7 @@ async def get_user(
 async def update_user(
     user_id: str,
     request: UserUpdateRequest,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """
@@ -479,14 +479,14 @@ async def update_user(
 
         {
             "full_name": "John Smith",
-            "role": "org_admin"
+            "role": "member"
         }
     """
     logger.info(f"User update requested for {user_id} by {current_user.email}")
 
     # Validate role if provided - admin role requires current user to be admin
     if request.role:
-        valid_roles = ["org_admin", "member", "viewer"]
+        valid_roles = ["member"]
         if current_user.role == "admin":
             valid_roles.append("admin")
 
@@ -571,7 +571,7 @@ async def update_user(
 )
 async def deactivate_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> None:
     """
@@ -635,7 +635,7 @@ async def deactivate_user(
 )
 async def reactivate_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """

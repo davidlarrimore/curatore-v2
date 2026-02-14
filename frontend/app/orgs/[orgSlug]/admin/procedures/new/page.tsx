@@ -936,7 +936,7 @@ export default function NewProcedurePage() {
                                           {/* Output variants */}
                                           {func.output_schema.variants && func.output_schema.variants.length > 0 && (
                                             <div className="mt-1.5">
-                                              {func.output_schema.variants.map((variant, idx) => {
+                                              {func.output_schema.variants.map((variant: Record<string, unknown>, idx: number) => {
                                                 const variantObj = variant as Record<string, unknown>
                                                 return (
                                                   <div key={idx} className="text-[10px] text-gray-500 dark:text-gray-400 italic">
@@ -960,8 +960,8 @@ export default function NewProcedurePage() {
                                               const exObj = ex as Record<string, unknown>
                                               return (
                                                 <div key={i} className="text-[10px]">
-                                                  {exObj.description && (
-                                                    <p className="text-gray-500 dark:text-gray-400 mb-0.5">{exObj.description as string}</p>
+                                                  {!!exObj.description && (
+                                                    <p className="text-gray-500 dark:text-gray-400 mb-0.5">{String(exObj.description)}</p>
                                                   )}
                                                   <pre className="bg-gray-900 text-gray-200 p-2 rounded text-[10px] overflow-x-auto leading-relaxed">
 {`function: ${func.name}

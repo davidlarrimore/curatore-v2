@@ -10,19 +10,27 @@ interface Connection {
   id: string
   name: string
   connection_type: string
-  config: Record<string, any>
+  config: Record<string, unknown>
   is_default: boolean
   is_active: boolean
   is_managed?: boolean
   managed_by?: string
 }
 
+interface ConfigFieldSchema {
+  type?: string
+  title?: string
+  description?: string
+  default?: unknown
+  required?: boolean
+}
+
 interface ConnectionType {
   type: string
   display_name: string
   description: string
-  config_schema: any
-  example_config: Record<string, any>
+  config_schema: { properties?: Record<string, ConfigFieldSchema> }
+  example_config: Record<string, unknown>
 }
 
 interface ConnectionFormProps {
@@ -39,7 +47,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
   const [connectionTypes, setConnectionTypes] = useState<ConnectionType[]>([])
   const [selectedType, setSelectedType] = useState(connection?.connection_type || '')
   const [name, setName] = useState(connection?.name || '')
-  const [config, setConfig] = useState<Record<string, any>>(connection?.config || {})
+  const [config, setConfig] = useState<Record<string, unknown>>(connection?.config || {})
   const [isDefault, setIsDefault] = useState(connection?.is_default || false)
   const [testOnSave, setTestOnSave] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
@@ -60,8 +68,8 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
           setSelectedType(response.types[0].type)
           setConfig(response.types[0].example_config || {})
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load connection types')
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to load connection types')
       }
     }
 
@@ -83,7 +91,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     setCurrentStep('configure')
   }
 
-  const handleConfigChange = (key: string, value: any) => {
+  const handleConfigChange = (key: string, value: unknown) => {
     setConfig(prev => ({ ...prev, [key]: value }))
   }
 
@@ -110,8 +118,8 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
       }
 
       onSuccess()
-    } catch (err: any) {
-      setError(err.message || `Failed to ${connection ? 'update' : 'create'} connection`)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : `Failed to ${connection ? 'update' : 'create'} connection`)
     } finally {
       setIsLoading(false)
     }
@@ -139,8 +147,8 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     }
   }
 
-  const renderConfigField = (key: string, schema: any) => {
-    const value = config[key] || ''
+  const renderConfigField = (key: string, schema: ConfigFieldSchema) => {
+    const value = (config[key] as string | number | undefined) || ''
     const fieldType = schema.type === 'string' ? 'text' : schema.type === 'integer' || schema.type === 'number' ? 'number' : 'text'
     const isSecret = key.toLowerCase().includes('secret') || key.toLowerCase().includes('password') || key.toLowerCase().includes('key')
     const isDoclingOcrField = key === 'docling_ocr_enabled'
@@ -334,8 +342,8 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
           <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
             <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">Connection Settings</h4>
             <div className="space-y-4">
-              {Object.entries(properties).map(([key, fieldSchema]: [string, any]) =>
-                renderConfigField(key, fieldSchema)
+              {Object.entries(properties).map(([key, fieldSchema]) =>
+                renderConfigField(key, fieldSchema as ConfigFieldSchema)
               )}
             </div>
           </div>

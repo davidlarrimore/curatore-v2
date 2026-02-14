@@ -47,8 +47,8 @@ function SetPasswordContent() {
     try {
       await authApi.resetPassword(token, newPassword)
       setSuccess(true)
-    } catch (err: any) {
-      setError(err.message || 'Failed to set password. The invitation link may have expired.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to set password. The invitation link may have expired.')
     } finally {
       setIsLoading(false)
     }

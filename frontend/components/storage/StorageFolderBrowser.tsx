@@ -146,8 +146,8 @@ export default function StorageFolderBrowser({
       setError(null)
       const result = await objectStorageApi.listBuckets()
       setBuckets(result.buckets)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load storage buckets')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load storage buckets')
     } finally {
       setLoading(false)
     }
@@ -162,8 +162,8 @@ export default function StorageFolderBrowser({
       setFiles(result.files.filter(f => !f.is_folder))
       setIsProtected(result.is_protected)
       setParentPath(result.parent_path)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load folder contents')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load folder contents')
     } finally {
       setLoading(false)
     }

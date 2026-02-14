@@ -111,9 +111,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(userData)
       setToken(accessToken)
       return true
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Check if it's a 401 error (unauthorized/expired token)
-      if (error?.status === 401) {
+      const status = (error as { status?: number } | null)?.status
+      if (status === 401) {
         console.log('Token expired or invalid - will attempt refresh')
       } else {
         // For other errors, log them
@@ -140,9 +141,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem(REFRESH_TOKEN_KEY, response.refresh_token)
       await loadUserFromToken(response.access_token)
       return true
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Only log as error if it's not a 401 (which is expected for expired tokens)
-      if (error?.status === 401) {
+      const status = (error as { status?: number } | null)?.status
+      if (status === 401) {
         console.log('Refresh token expired or invalid')
       } else {
         console.error('Failed to refresh token:', error)
@@ -165,7 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem(REFRESH_TOKEN_KEY, response.refresh_token)
       await loadUserFromToken(response.access_token)
       return true
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to extend session:', error)
       return false
     }

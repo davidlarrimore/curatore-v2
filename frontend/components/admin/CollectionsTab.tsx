@@ -33,8 +33,8 @@ export default function CollectionsTab({ onError }: CollectionsTabProps) {
     try {
       const res = await collectionsApi.listCollections(token, { limit: 100 })
       setCollections(res.collections)
-    } catch (err: any) {
-      onError?.(err.message || 'Failed to load collections')
+    } catch (err: unknown) {
+      onError?.(err instanceof Error ? err.message : 'Failed to load collections')
     } finally {
       setIsLoading(false)
     }
@@ -50,8 +50,8 @@ export default function CollectionsTab({ onError }: CollectionsTabProps) {
     try {
       await collectionsApi.deleteCollection(token, col.id)
       await loadCollections()
-    } catch (err: any) {
-      onError?.(err.message || 'Failed to delete collection')
+    } catch (err: unknown) {
+      onError?.(err instanceof Error ? err.message : 'Failed to delete collection')
     }
   }
 
@@ -61,8 +61,8 @@ export default function CollectionsTab({ onError }: CollectionsTabProps) {
     try {
       await collectionsApi.clearCollection(token, col.id)
       await loadCollections()
-    } catch (err: any) {
-      onError?.(err.message || 'Failed to clear collection')
+    } catch (err: unknown) {
+      onError?.(err instanceof Error ? err.message : 'Failed to clear collection')
     }
   }
 
@@ -228,8 +228,8 @@ function CreateCollectionForm({
         collection_type: collectionType,
       })
       onCreated()
-    } catch (err: any) {
-      onError?.(err.message || 'Failed to create collection')
+    } catch (err: unknown) {
+      onError?.(err instanceof Error ? err.message : 'Failed to create collection')
     } finally {
       setIsSaving(false)
     }
@@ -340,8 +340,8 @@ function PopulateModal({
     try {
       const res = await collectionsApi.populateCollection(token, collection.id, { asset_ids: ids })
       setResult(res)
-    } catch (err: any) {
-      onError?.(err.message || 'Failed to populate collection')
+    } catch (err: unknown) {
+      onError?.(err instanceof Error ? err.message : 'Failed to populate collection')
     } finally {
       setIsPopulating(false)
     }

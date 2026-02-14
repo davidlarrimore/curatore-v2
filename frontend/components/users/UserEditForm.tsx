@@ -78,8 +78,8 @@ export default function UserEditForm({ user, onSuccess, onCancel }: UserEditForm
 
       alert('✅ User updated successfully!')
       onSuccess()
-    } catch (err: any) {
-      setError(err.message || 'Failed to update user')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update user')
     } finally {
       setIsLoading(false)
     }

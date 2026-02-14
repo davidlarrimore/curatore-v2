@@ -63,7 +63,7 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.tasks import async_delete_scrape_collection_task
-from app.dependencies import get_current_org_id, get_current_user, require_data_source_enabled, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin, require_data_source_enabled
 
 # Initialize router
 router = APIRouter(
@@ -186,7 +186,7 @@ async def list_collections(
 async def create_collection(
     request: ScrapeCollectionCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ScrapeCollectionResponse:
     """
     Create a new scrape collection.
@@ -277,7 +277,7 @@ async def update_collection(
     collection_id: str,
     request: ScrapeCollectionUpdateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ScrapeCollectionResponse:
     """
     Update collection settings.
@@ -345,7 +345,7 @@ async def update_collection(
 async def delete_collection(
     collection_id: str,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ):
     """
     Initiate async deletion of a scrape collection.
@@ -650,7 +650,7 @@ async def add_source(
     collection_id: str,
     request: ScrapeSourceCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ScrapeSourceResponse:
     """
     Add a source to a collection.
@@ -716,7 +716,7 @@ async def delete_source(
     collection_id: str,
     source_id: str,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> None:
     """
     Delete a source from a collection.

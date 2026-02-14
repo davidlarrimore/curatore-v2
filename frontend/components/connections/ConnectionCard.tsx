@@ -5,14 +5,14 @@ interface Connection {
   id: string
   name: string
   connection_type: string
-  config: Record<string, any>
+  config: Record<string, unknown>
   is_default: boolean
   is_active: boolean
   is_managed?: boolean
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
-  test_result?: Record<string, any> | null
+  test_result?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -127,21 +127,24 @@ export default function ConnectionCard({
     const { connection_type, config } = connection
 
     if (connection_type === 'microsoft_graph') {
+      const tenantId = typeof config.tenant_id === 'string' ? config.tenant_id : ''
+      const clientId = typeof config.client_id === 'string' ? config.client_id : ''
       return [
-        { label: 'Tenant', value: config.tenant_id ? `${config.tenant_id.substring(0, 8)}...` : 'Not set' },
-        { label: 'Client', value: config.client_id ? `${config.client_id.substring(0, 8)}...` : 'Not set' }
+        { label: 'Tenant', value: tenantId ? `${tenantId.substring(0, 8)}...` : 'Not set' },
+        { label: 'Client', value: clientId ? `${clientId.substring(0, 8)}...` : 'Not set' }
       ]
     }
 
     if (connection_type === 'extraction') {
-      const engineType = config.engine_type || 'unknown'
+      const engineType = typeof config.engine_type === 'string' ? config.engine_type : 'unknown'
       const engineLabel = engineType === 'document-service' || engineType === 'extraction-service'
         ? 'Document Service'
         : engineType.charAt(0).toUpperCase() + engineType.slice(1)
+      const serviceUrl = typeof config.service_url === 'string' ? config.service_url : ''
 
       const summary: SummaryItem[] = [
         { label: 'Engine', value: engineLabel },
-        { label: 'URL', value: config.service_url?.replace(/^https?:\/\//, '') || 'Not set' },
+        { label: 'URL', value: serviceUrl ? serviceUrl.replace(/^https?:\/\//, '') : 'Not set' },
         { label: 'Timeout', value: `${config.timeout || 30}s` }
       ]
 

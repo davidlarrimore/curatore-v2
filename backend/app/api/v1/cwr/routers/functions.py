@@ -150,13 +150,6 @@ async def execute_function(
     if not func:
         raise HTTPException(status_code=404, detail=f"Function not found: {name}")
 
-    # RBAC: side-effect functions require org_admin or admin role
-    if func.meta.side_effects and current_user.role not in ("admin", "org_admin"):
-        raise HTTPException(
-            status_code=403,
-            detail="Functions with side effects require org_admin or admin role",
-        )
-
     # Governance: check required_data_sources before execution
     required_ds = getattr(func.meta, 'required_data_sources', None)
     if required_ds:

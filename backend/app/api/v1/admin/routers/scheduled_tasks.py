@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from app.core.database.models import Run, ScheduledTask, User
 from app.core.ops.scheduled_task_service import scheduled_task_service
 from app.core.shared.database_service import database_service
-from app.dependencies import get_effective_org_id, require_org_admin_or_above
+from app.dependencies import get_effective_org_id, require_admin
 
 # Initialize router
 router = APIRouter(prefix="/scheduled-tasks", tags=["Scheduled Tasks"])
@@ -192,7 +192,7 @@ def _run_to_response(run: Run) -> TaskRunResponse:
 )
 async def list_scheduled_tasks(
     enabled_only: bool = Query(False, description="Only return enabled tasks"),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> ScheduledTaskListResponse:
     """
@@ -230,7 +230,7 @@ async def list_scheduled_tasks(
 )
 async def get_maintenance_stats(
     days: int = Query(7, ge=1, le=90, description="Number of days to look back"),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> MaintenanceStatsResponse:
     """
     Get maintenance task statistics.
@@ -263,7 +263,7 @@ async def get_maintenance_stats(
 )
 async def get_scheduled_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> ScheduledTaskResponse:
     """
@@ -309,7 +309,7 @@ async def get_task_runs(
     task_id: UUID,
     limit: int = Query(20, ge=1, le=100, description="Maximum runs to return"),
     offset: int = Query(0, ge=0, description="Number of runs to skip"),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> TaskRunListResponse:
     """
@@ -367,7 +367,7 @@ async def get_task_runs(
 )
 async def enable_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> EnableDisableResponse:
     """
@@ -422,7 +422,7 @@ async def enable_task(
 )
 async def disable_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> EnableDisableResponse:
     """
@@ -478,7 +478,7 @@ async def disable_task(
 async def trigger_task(
     task_id: UUID,
     body: Optional[TriggerTaskRequest] = None,
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
     org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> TriggerTaskResponse:
     """

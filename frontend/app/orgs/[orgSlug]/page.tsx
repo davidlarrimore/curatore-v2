@@ -21,7 +21,13 @@ import { RefreshCw, Building2 } from 'lucide-react'
 interface HealthData {
   timestamp: string
   overall_status: 'healthy' | 'unhealthy' | 'degraded'
-  components: Record<string, { status?: string }>
+  components: {
+    [key: string]: {
+      status: 'healthy' | 'unhealthy' | 'degraded' | 'not_configured' | 'unknown' | 'not_enabled'
+      message: string
+      [key: string]: string | number | boolean | undefined
+    } | undefined
+  }
   issues?: string[]
 }
 
@@ -76,7 +82,7 @@ interface Run {
 export default function OrgDashboardPage() {
   const { user, token, isAuthenticated } = useAuth()
   const { organization, orgSlug } = useOrgUrl()
-  const isOrgAdmin = user?.role === 'org_admin' || user?.role === 'admin'
+  const isAdmin = user?.role === 'admin'
 
   // Data states
   const [healthData, setHealthData] = useState<HealthData | null>(null)
@@ -99,7 +105,7 @@ export default function OrgDashboardPage() {
   const fetchHealthData = useCallback(async () => {
     try {
       const health = await systemApi.getComprehensiveHealth()
-      setHealthData(health)
+      setHealthData(health as unknown as HealthData)
     } catch (error) {
       console.error('Failed to fetch health data:', error)
     }
@@ -115,7 +121,7 @@ export default function OrgDashboardPage() {
         runsApi.listRuns(token, { limit: 5 }),
       ])
       setRunStats(statsData)
-      setRecentRuns(runsData.items || [])
+      setRecentRuns((runsData.items || []) as unknown as Run[])
     } catch (error) {
       console.error('Failed to fetch run stats:', error)
     }
@@ -260,7 +266,7 @@ export default function OrgDashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {/* Quick Actions - Full width on small, 1 col on large */}
           <div className="lg:col-span-2 xl:col-span-1">
-            <QuickActionsCard isAdmin={isOrgAdmin} orgSlug={orgSlug || undefined} />
+            <QuickActionsCard isAdmin={isAdmin} orgSlug={orgSlug || undefined} />
           </div>
 
           {/* System Health */}

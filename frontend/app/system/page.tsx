@@ -59,11 +59,11 @@ export default function SystemDashboardPage() {
         const healthData = healthResult.value
         // Transform components object to array
         const componentsArray: HealthComponent[] = healthData.components
-          ? Object.entries(healthData.components).map(([name, data]: [string, any]) => ({
-              name: data.name || name,
-              status: data.status || 'unknown',
-              message: data.message || data.error,
-              version: data.version,
+          ? Object.entries(healthData.components as Record<string, Record<string, unknown>>).map(([name, data]) => ({
+              name: (data.name as string) || name,
+              status: (data.status as string) || 'unknown',
+              message: (data.message as string) || (data.error as string),
+              version: data.version as string | undefined,
             }))
           : []
         setHealth({

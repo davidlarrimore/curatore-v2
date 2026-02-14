@@ -42,8 +42,6 @@ export function TopNavigation({
     availableOrganizations,
     mode,
     isLoading: orgLoading,
-    switchOrganization,
-    switchToSystemContext,
   } = useOrganization()
 
   // Determine header styling based on system vs org mode
@@ -200,8 +198,8 @@ export function TopNavigation({
                     <div className="py-1">
                       <Menu.Item>
                         {({ active }) => (
-                          <button
-                            onClick={switchToSystemContext}
+                          <a
+                            href="/system"
                             className={`${
                               active ? 'bg-slate-50 dark:bg-slate-700' : ''
                             } ${
@@ -215,7 +213,7 @@ export function TopNavigation({
                                 Active
                               </span>
                             )}
-                          </button>
+                          </a>
                         )}
                       </Menu.Item>
                     </div>
@@ -241,8 +239,8 @@ export function TopNavigation({
                       availableOrganizations.map((org) => (
                         <Menu.Item key={org.id}>
                           {({ active }) => (
-                            <button
-                              onClick={() => switchOrganization(org.id)}
+                            <a
+                              href={`/orgs/${org.slug}`}
                               className={`${
                                 active ? 'bg-slate-50 dark:bg-slate-700' : ''
                               } ${
@@ -258,7 +256,7 @@ export function TopNavigation({
                                   Active
                                 </span>
                               )}
-                            </button>
+                            </a>
                           )}
                         </Menu.Item>
                       ))
@@ -273,15 +271,15 @@ export function TopNavigation({
                     <div className="py-1">
                       <Menu.Item>
                         {({ active }) => (
-                          <button
-                            onClick={() => router.push('/system/organizations')}
+                          <a
+                            href="/system/organizations"
                             className={`${
                               active ? 'bg-slate-50 dark:bg-slate-700' : ''
                             } text-slate-600 dark:text-slate-400 flex w-full items-center gap-3 px-4 py-2.5 text-sm`}
                           >
                             <Settings className="h-4 w-4" />
                             <span>Manage Organizations</span>
-                          </button>
+                          </a>
                         )}
                       </Menu.Item>
                     </div>
@@ -340,13 +338,9 @@ export function TopNavigation({
                     <span className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded ${
                       user?.role === 'admin'
                         ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300'
-                        : user?.role === 'org_admin'
-                        ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300'
                         : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
                     }`}>
-                      {user?.role === 'admin' ? 'System Admin' :
-                       user?.role === 'org_admin' ? 'Org Admin' :
-                       user?.role === 'member' ? 'Member' : 'Viewer'}
+                      {user?.role === 'admin' ? 'System Admin' : 'Member'}
                     </span>
                   </div>
                 </div>

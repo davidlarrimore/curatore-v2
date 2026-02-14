@@ -382,7 +382,7 @@ export default function SystemFunctionsPage() {
                               )}
                               {fn.output_schema.properties && Object.keys(fn.output_schema.properties).length > 0 && (
                                 <div className="mt-2 space-y-1.5">
-                                  {Object.entries(fn.output_schema.properties).map(([name, prop]: [string, Record<string, unknown>]) => (
+                                  {(Object.entries(fn.output_schema.properties) as [string, Record<string, unknown>][]).map(([name, prop]) => (
                                     <div key={name} className="flex items-start gap-2 text-sm">
                                       <span className="font-mono text-amber-600 dark:text-amber-400">
                                         {name}
@@ -390,7 +390,7 @@ export default function SystemFunctionsPage() {
                                       <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                                         {prop.type as string}
                                       </span>
-                                      {prop.nullable && (
+                                      {!!prop.nullable && (
                                         <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500">
                                           nullable
                                         </span>
@@ -404,7 +404,7 @@ export default function SystemFunctionsPage() {
                               )}
                               {fn.output_schema.items?.properties && Object.keys(fn.output_schema.items.properties).length > 0 && (
                                 <div className="mt-2 space-y-1.5">
-                                  {Object.entries(fn.output_schema.items.properties).map(([name, prop]: [string, Record<string, unknown>]) => (
+                                  {(Object.entries(fn.output_schema.items.properties) as [string, Record<string, unknown>][]).map(([name, prop]) => (
                                     <div key={name} className="flex items-start gap-2 text-sm">
                                       <span className="font-mono text-amber-600 dark:text-amber-400">
                                         {name}
@@ -412,7 +412,7 @@ export default function SystemFunctionsPage() {
                                       <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                                         {prop.type as string}
                                       </span>
-                                      {prop.nullable && (
+                                      {!!prop.nullable && (
                                         <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500">
                                           nullable
                                         </span>
@@ -439,7 +439,7 @@ export default function SystemFunctionsPage() {
                                         {variant.description as string}
                                       </span>
                                     </div>
-                                    {variant.properties && Object.keys(variant.properties as Record<string, unknown>).length > 0 && (
+                                    {!!variant.properties && Object.keys(variant.properties as Record<string, unknown>).length > 0 && (
                                       <div className="mt-2 space-y-1">
                                         {Object.entries(variant.properties as Record<string, Record<string, unknown>>).map(([name, prop]) => (
                                           <div key={name} className="flex items-start gap-2 text-xs">
@@ -453,7 +453,7 @@ export default function SystemFunctionsPage() {
                                         ))}
                                       </div>
                                     )}
-                                    {(variant.items as Record<string, unknown>)?.properties && Object.keys((variant.items as Record<string, Record<string, unknown>>).properties).length > 0 && (
+                                    {!!(variant.items as Record<string, unknown>)?.properties && Object.keys((variant.items as Record<string, Record<string, unknown>>).properties).length > 0 && (
                                       <div className="mt-2 space-y-1">
                                         {Object.entries((variant.items as Record<string, Record<string, Record<string, unknown>>>).properties).map(([name, prop]) => (
                                           <div key={name} className="flex items-start gap-2 text-xs">

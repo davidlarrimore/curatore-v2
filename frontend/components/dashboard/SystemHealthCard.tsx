@@ -18,7 +18,7 @@ import {
 interface ComponentHealth {
   status: 'healthy' | 'unhealthy' | 'degraded' | 'not_configured' | 'unknown' | 'not_enabled'
   message: string
-  [key: string]: any
+  [key: string]: string | number | boolean | null | undefined
 }
 
 interface HealthData {

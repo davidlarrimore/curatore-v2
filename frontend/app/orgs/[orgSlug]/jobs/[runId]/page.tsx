@@ -732,14 +732,14 @@ export default function JobDetailPage() {
             )}
 
             {/* Source Configuration Link */}
-            {run.run_type === 'sam_pull' && run.config && (run.config as Record<string, unknown>).search_id && (
+            {run.run_type === 'sam_pull' && !!run.config && !!(run.config as Record<string, unknown>).search_id && (
               <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                   <Building2 className="h-4 w-4 text-amber-500" />
                   Source Configuration
                 </h3>
                 <Link
-                  href={orgUrl(`/syncs/sam/${(run.config as Record<string, unknown>).search_id}`)}
+                  href={orgUrl(`/syncs/sam/${String((run.config as Record<string, unknown>).search_id)}`)}
                   className="flex items-center gap-3 p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors"
                 >
                   <Building2 className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -756,14 +756,14 @@ export default function JobDetailPage() {
               </div>
             )}
 
-            {run.run_type === 'scrape' && run.config && (run.config as Record<string, unknown>).collection_id && (
+            {run.run_type === 'scrape' && !!run.config && !!(run.config as Record<string, unknown>).collection_id && (
               <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                   <Globe className="h-4 w-4 text-emerald-500" />
                   Source Configuration
                 </h3>
                 <Link
-                  href={orgUrl(`/syncs/scrape/${(run.config as Record<string, unknown>).collection_id}`)}
+                  href={orgUrl(`/syncs/scrape/${String((run.config as Record<string, unknown>).collection_id)}`)}
                   className="flex items-center gap-3 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors"
                 >
                   <Globe className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
@@ -780,14 +780,14 @@ export default function JobDetailPage() {
               </div>
             )}
 
-            {run.run_type === 'sharepoint_sync' && run.config && (run.config as Record<string, unknown>).config_id && (
+            {run.run_type === 'sharepoint_sync' && !!run.config && !!(run.config as Record<string, unknown>).config_id && (
               <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                   <FolderSync className="h-4 w-4 text-purple-500" />
                   Source Configuration
                 </h3>
                 <Link
-                  href={orgUrl(`/syncs/sharepoint/${(run.config as Record<string, unknown>).config_id}`)}
+                  href={orgUrl(`/syncs/sharepoint/${String((run.config as Record<string, unknown>).config_id)}`)}
                   className="flex items-center gap-3 p-3 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
                 >
                   <FolderSync className="h-5 w-5 text-purple-600 dark:text-purple-400" />
@@ -804,14 +804,14 @@ export default function JobDetailPage() {
               </div>
             )}
 
-            {run.run_type === 'procedure' && run.config && (run.config as Record<string, unknown>).procedure_slug && (
+            {run.run_type === 'procedure' && !!run.config && !!(run.config as Record<string, unknown>).procedure_slug && (
               <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                   <Zap className="h-4 w-4 text-cyan-500" />
                   Source Configuration
                 </h3>
                 <Link
-                  href={orgUrl(`/admin/procedures/${(run.config as Record<string, unknown>).procedure_slug}/edit`)}
+                  href={orgUrl(`/admin/procedures/${String((run.config as Record<string, unknown>).procedure_slug)}/edit`)}
                   className="flex items-center gap-3 p-3 rounded-lg border border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors"
                 >
                   <Zap className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />

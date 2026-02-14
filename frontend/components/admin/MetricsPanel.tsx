@@ -45,9 +45,9 @@ export default function MetricsPanel() {
       setError(null)
       const data = await metricsApi.getProcedureMetrics(token, days)
       setMetrics(data)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to fetch metrics:', err)
-      setError(err.message || 'Failed to load metrics')
+      setError(err instanceof Error ? err.message : 'Failed to load metrics')
     } finally {
       setIsLoading(false)
     }

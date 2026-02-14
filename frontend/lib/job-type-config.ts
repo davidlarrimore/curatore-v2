@@ -16,11 +16,13 @@ import {
   Database,
   TrendingUp,
   Wrench,
+  FileText,
   LucideIcon,
 } from 'lucide-react'
 
 // Job type identifiers
 export type JobType =
+  | 'extraction'
   | 'sam_pull'
   | 'sam_refresh'
   | 'sharepoint_sync'
@@ -47,6 +49,16 @@ export interface JobTypeConfig {
 
 // Job type configurations
 export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
+  extraction: {
+    label: 'Extraction',
+    icon: FileText,
+    color: 'indigo',
+    resourceType: 'asset',
+    hasChildJobs: false,
+    phases: ['extracting', 'indexing'],
+    completedToast: (name) => `Extraction completed: ${name}`,
+    failedToast: (name, error) => `Extraction failed: ${name}${error ? ` - ${error}` : ''}`,
+  },
   sam_pull: {
     label: 'SAM.gov Pull',
     icon: Search,
@@ -163,13 +175,17 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
 export function getJobTypeFromRunType(runType: string): JobType | null {
   // Direct mappings
   const directMap: Record<string, JobType> = {
+    extraction: 'extraction',
+    extraction_enhancement: 'extraction',
     sam_pull: 'sam_pull',
     sam_refresh: 'sam_refresh',
     sharepoint_sync: 'sharepoint_sync',
     scrape: 'scrape',
     upload: 'upload',
     pipeline: 'pipeline',
+    pipeline_run: 'pipeline',
     procedure: 'procedure',
+    procedure_run: 'procedure',
     deletion: 'deletion',
     salesforce_import: 'salesforce_import',
     forecast_sync: 'forecast_sync',
@@ -182,6 +198,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
 
   // Check aliases
   if (runType === 'gdrive_sync') return 'sharepoint_sync' // Future compatibility
+  if (runType.startsWith('extraction')) return 'extraction'
   if (runType.startsWith('sam_')) return 'sam_pull'
   if (runType.startsWith('scrape_')) return 'scrape'
   if (runType.startsWith('sharepoint_')) return 'sharepoint_sync'

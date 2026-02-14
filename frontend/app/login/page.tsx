@@ -38,9 +38,9 @@ function LoginContent() {
 
   const getLoginErrorMessage = (err: unknown) => {
     if (err && typeof err === 'object') {
-      const error = err as { message?: string; detail?: any }
+      const error = err as { message?: string; detail?: string | { detail?: string } }
       if (typeof error.detail === 'string') return error.detail
-      if (error.detail && typeof error.detail.detail === 'string') return error.detail.detail
+      if (error.detail && typeof error.detail === 'object' && typeof error.detail.detail === 'string') return error.detail.detail
       if (typeof error.message === 'string' && error.message.trim()) return error.message
     }
     return 'Invalid email/username or password.'
@@ -97,8 +97,8 @@ function LoginContent() {
       if (isAuthenticated) {
         redirectToReturnUrl()
       }
-    } catch (err: any) {
-      if (err?.message === 'Health check timeout') {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'Health check timeout') {
         toast.error('Curatore is restarting. Please wait and try again.')
         setLoginStage('idle')
         return

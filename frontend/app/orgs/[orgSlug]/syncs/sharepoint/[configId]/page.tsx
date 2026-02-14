@@ -1779,7 +1779,7 @@ export default function SharePointSyncConfigPage() {
                 </p>
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                   Syncing is stopped and documents have been removed from the search index.
-                  Assets ({config.stats?.synced_files || config.stats?.storage?.synced_count || 0} files) are still accessible but won't appear in search results.
+                  Assets ({config.stats?.synced_files || config.stats?.storage?.synced_count || 0} files) are still accessible but won&apos;t appear in search results.
                 </p>
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
                   To permanently delete all assets and free up storage, click the <strong>Delete</strong> button above.

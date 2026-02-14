@@ -64,8 +64,8 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
       }
 
       onSuccess()
-    } catch (err: any) {
-      setError(err.message || 'Failed to invite user')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to invite user')
     } finally {
       setIsLoading(false)
     }

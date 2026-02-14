@@ -20,6 +20,19 @@
 version: "2.0"
 
 # ============================================================================
+# Authentication
+# ============================================================================
+# Controls whether JWT/API-key authentication is enforced on all endpoints.
+#
+# - true:  All requests must include a valid Bearer token or X-API-Key header.
+#          This is the recommended setting for any shared or production environment.
+# - false: Authentication is bypassed; every request is treated as the default
+#          admin user. Useful for local development and initial setup only.
+#
+# Default: false
+enable_auth: true
+
+# ============================================================================
 # Database Configuration (optional)
 # ============================================================================
 # Primary PostgreSQL connection settings.

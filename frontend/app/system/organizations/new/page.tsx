@@ -51,8 +51,8 @@ export default function NewOrganizationPage() {
       })
 
       router.push('/system/organizations')
-    } catch (err: any) {
-      setError(err.message || 'Failed to create organization')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create organization')
     } finally {
       setIsLoading(false)
     }

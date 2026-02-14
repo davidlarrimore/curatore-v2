@@ -356,6 +356,23 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
+def _load_settings() -> Settings:
+    """Load Settings, then overlay top-level config.yml values (enable_auth)."""
+    s = Settings()
+    try:
+        from app.core.models.config_models import AppConfig
+        import pathlib
+        yml_path = pathlib.Path("/app/config.yml")
+        if not yml_path.exists():
+            yml_path = pathlib.Path(__file__).resolve().parents[1] / "config.yml"
+        if yml_path.exists():
+            app_config = AppConfig.from_yaml(str(yml_path))
+            object.__setattr__(s, "enable_auth", app_config.enable_auth)
+    except Exception:
+        # Settings defaults still work for CLI commands/tests that don't need config.yml
+        pass
+    return s
+
 
 # Global settings instance (imported elsewhere)
-settings = Settings()
+settings = _load_settings()

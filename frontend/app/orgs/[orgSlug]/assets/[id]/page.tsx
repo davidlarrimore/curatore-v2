@@ -9,7 +9,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useOrgUrl } from '@/lib/org-url-context'
-import { assetsApi, API_BASE_URL, API_PATH_VERSION, type Run, type AssetMetadataList, type AssetQueueInfo, type Asset, type ExtractionResult, type AssetVersion } from '@/lib/api'
+import { assetsApi, API_BASE_URL, API_PATH_VERSION, getOrgContext, type Run, type AssetMetadataList, type AssetQueueInfo, type Asset, type ExtractionResult, type AssetVersion } from '@/lib/api'
 import { ExtractionStatus, isActiveStatus } from '@/components/ui/ExtractionStatus'
 import { POLLING } from '@/lib/polling-config'
 import { formatDateTime } from '@/lib/date-utils'
@@ -288,11 +288,15 @@ export default function AssetDetailPage() {
       // Download extracted markdown via the asset download endpoint
       const url = `${API_BASE_URL}/api/${API_PATH_VERSION}/data/assets/${asset.id}/download`
 
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+      }
+      const orgId = getOrgContext()
+      if (orgId) {
+        headers['X-Organization-Id'] = orgId
+      }
+
+      const response = await fetch(url, { headers })
 
       if (!response.ok) {
         throw new Error(`Failed to download content: ${response.statusText}`)
@@ -978,7 +982,7 @@ export default function AssetDetailPage() {
                       </Button>
                     </div>
                     <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
-                      View the extracted markdown in the "Extracted Content" tab
+                      View the extracted markdown in the &ldquo;Extracted Content&rdquo; tab
                     </p>
                   </div>
                 ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || asset.content_type === 'application/vnd.ms-powerpoint' ? (
@@ -1003,7 +1007,7 @@ export default function AssetDetailPage() {
                       </Button>
                     </div>
                     <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
-                      View the extracted markdown in the "Extracted Content" tab
+                      View the extracted markdown in the &ldquo;Extracted Content&rdquo; tab
                     </p>
                   </div>
                 ) : (
@@ -1501,10 +1505,10 @@ export default function AssetDetailPage() {
                             {run.status === 'pending' && run.queue_position != null && (
                               <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
                                 Queue #{run.queue_position}
-                                {run.queue_priority && run.queue_priority > 0 && ' (Priority)'}
+                                {!!run.queue_priority && run.queue_priority > 0 && ' (Priority)'}
                               </span>
                             )}
-                            {(run.config as Record<string, unknown>)?.extractor_version && (
+                            {!!(run.config as Record<string, unknown>)?.extractor_version && (
                               <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
                                 {String((run.config as Record<string, unknown>).extractor_version)}
                               </span>
@@ -1523,7 +1527,7 @@ export default function AssetDetailPage() {
                           </div>
                           {run.results_summary && (
                             <div className="mt-2 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50 rounded p-2">
-                              {(run.results_summary as Record<string, unknown>).status && (
+                              {!!(run.results_summary as Record<string, unknown>).status && (
                                 <span className="font-medium">{String((run.results_summary as Record<string, unknown>).status)}</span>
                               )}
                               {(run.results_summary as Record<string, unknown>).improvement_percent !== undefined && (

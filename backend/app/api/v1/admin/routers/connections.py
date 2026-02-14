@@ -42,7 +42,7 @@ from app.api.v1.admin.schemas import (
 from app.core.auth.connection_service import connection_service
 from app.core.database.models import Connection, Organization, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, get_current_user, require_admin, require_org_admin, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin
 
 # Initialize router
 router = APIRouter(prefix="/connections", tags=["Connections"])
@@ -312,7 +312,7 @@ async def list_all_connections(
 async def create_connection(
     request: ConnectionCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ConnectionResponse:
     """
     Create new connection.
@@ -502,7 +502,7 @@ async def update_connection(
     connection_id: str,
     request: ConnectionUpdateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ConnectionResponse:
     """
     Update connection details.
@@ -634,7 +634,7 @@ async def update_connection(
 async def delete_connection(
     connection_id: str,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> None:
     """
     Delete connection.
@@ -886,7 +886,7 @@ async def test_llm_credentials(
 async def set_default_connection(
     connection_id: str,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ConnectionResponse:
     """
     Set connection as default.

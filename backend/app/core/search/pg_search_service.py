@@ -471,8 +471,14 @@ class PgSearchService:
         display_type_mapper: Callable[[str], str],
     ) -> SearchResults:
         """Execute hybrid search combining keyword and semantic results."""
-        # Generate query embedding
-        query_embedding = await embedding_service.get_embedding(query)
+        # Generate query embedding — fall back to keyword search on failure
+        try:
+            query_embedding = await embedding_service.get_embedding(query)
+        except Exception as e:
+            logger.warning(f"Embedding generation failed, falling back to keyword search: {e}")
+            return await self._keyword_search_generic(
+                session, filter_clause, params, limit, offset, display_type_mapper
+            )
         params["embedding"] = "[" + ",".join(str(f) for f in query_embedding) + "]"
         params["keyword_weight"] = 1 - semantic_weight
         params["semantic_weight"] = semantic_weight

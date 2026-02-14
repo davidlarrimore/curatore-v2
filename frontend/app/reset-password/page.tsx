@@ -40,8 +40,8 @@ function ResetPasswordContent() {
     try {
       await authApi.resetPassword(token, newPassword)
       setSuccess(true)
-    } catch (err: any) {
-      setError(err.message || 'Failed to reset password. The link may have expired.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to reset password. The link may have expired.')
     } finally {
       setIsLoading(false)
     }

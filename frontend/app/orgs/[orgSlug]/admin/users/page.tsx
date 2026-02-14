@@ -99,7 +99,7 @@ export default function UsersPage() {
     switch (role) {
       case 'admin':
         return 'error'
-      case 'user':
+      case 'member':
         return 'info'
       default:
         return 'secondary'

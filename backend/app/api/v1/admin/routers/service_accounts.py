@@ -43,7 +43,7 @@ from app.core.database.models import ApiKey, Organization, ServiceAccount, User
 from app.core.shared.database_service import database_service
 from app.dependencies import (
     get_effective_org_id,
-    require_org_admin_or_above,
+    require_admin,
     require_org_context,
 )
 
@@ -54,7 +54,7 @@ router = APIRouter(prefix="/service-accounts", tags=["Service Accounts"])
 logger = logging.getLogger("curatore.api.service_accounts")
 
 # Valid roles for service accounts
-VALID_ROLES = {"member", "viewer"}
+VALID_ROLES = {"member"}
 
 
 # =========================================================================
@@ -73,7 +73,7 @@ async def list_service_accounts(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum records to return"),
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ServiceAccountListResponse:
     """List service accounts for the current organization."""
     logger.info(f"User {user.email} listing service accounts for org {org_id}")
@@ -136,7 +136,7 @@ async def list_service_accounts(
 async def create_service_account(
     request: ServiceAccountCreateRequest,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ServiceAccountResponse:
     """Create a new service account."""
     logger.info(f"User {user.email} creating service account: {request.name}")
@@ -205,7 +205,7 @@ async def create_service_account(
 async def get_service_account(
     service_account_id: UUID,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ServiceAccountResponse:
     """Get service account details."""
     async with database_service.get_session() as session:
@@ -253,7 +253,7 @@ async def update_service_account(
     service_account_id: UUID,
     request: ServiceAccountUpdateRequest,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ServiceAccountResponse:
     """Update a service account."""
     logger.info(f"User {user.email} updating service account {service_account_id}")
@@ -341,7 +341,7 @@ async def update_service_account(
 async def delete_service_account(
     service_account_id: UUID,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> None:
     """Delete a service account."""
     logger.info(f"User {user.email} deleting service account {service_account_id}")
@@ -381,7 +381,7 @@ async def delete_service_account(
 async def list_service_account_api_keys(
     service_account_id: UUID,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ApiKeyListResponse:
     """List API keys for a service account."""
     async with database_service.get_session() as session:
@@ -434,7 +434,7 @@ async def create_service_account_api_key(
     service_account_id: UUID,
     request: ApiKeyCreateRequest,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> ServiceAccountApiKeyCreateResponse:
     """Create an API key for a service account."""
     logger.info(f"User {user.email} creating API key for service account {service_account_id}")
@@ -500,7 +500,7 @@ async def delete_service_account_api_key(
     service_account_id: UUID,
     api_key_id: UUID,
     org_id: UUID = Depends(require_org_context),
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
 ) -> None:
     """Delete an API key for a service account."""
     logger.info(f"User {user.email} deleting API key {api_key_id}")

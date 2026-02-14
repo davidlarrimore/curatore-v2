@@ -201,7 +201,7 @@ class AuthService:
         Args:
             user_id: User's UUID as string
             organization_id: Organization's UUID as string (None for system admins)
-            role: User's role (admin, org_admin, member, viewer)
+            role: User's role (admin, member)
             additional_claims: Optional additional JWT claims
 
         Returns:
@@ -211,7 +211,7 @@ class AuthService:
             >>> token = auth_service.create_access_token(
             ...     user_id="123e4567-e89b-12d3-a456-426614174000",
             ...     organization_id="987fcdeb-51a2-43f7-8b6a-123456789abc",
-            ...     role="org_admin"
+            ...     role="member"
             ... )
             >>> print(token)
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'

@@ -91,12 +91,14 @@ class ConfigLoader:
             logger.info("Configuration loaded successfully")
             return self._config
         except FileNotFoundError:
-            logger.warning(f"Configuration file not found: {self.config_path}")
-            logger.warning("Falling back to environment variables")
+            logger.error(
+                f"config.yml not found. Searched: {self.config_path}  "
+                "Copy config.yml.example to config.yml and configure it."
+            )
             self._loaded = False
             raise
         except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
+            logger.error(f"config.yml failed to parse: {e}")
             self._loaded = False
             raise ValueError(f"Configuration error: {e}") from e
 
@@ -123,18 +125,19 @@ class ConfigLoader:
         """
         return self._loaded and self._config is not None
 
-    def get_config(self) -> Optional[AppConfig]:
+    def get_config(self) -> AppConfig:
         """
         Get the full configuration object.
 
         Returns:
-            AppConfig instance or None if not loaded
+            AppConfig instance (guaranteed non-None; raises on failure)
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If YAML is invalid or validation fails
         """
         if not self.is_loaded():
-            try:
-                return self.load()
-            except Exception:
-                return None
+            return self.load()
         return self._config
 
     def get(self, key_path: str, default: Any = None) -> Any:
@@ -154,8 +157,9 @@ class ConfigLoader:
             >>> config_loader.get("llm.timeout", 60)
             60
         """
-        config = self.get_config()
-        if config is None:
+        try:
+            config = self.get_config()
+        except Exception:
             return default
 
         # Navigate dot notation path
@@ -186,9 +190,6 @@ class ConfigLoader:
 
         try:
             config = self.get_config()
-            if config is None:
-                errors.append("Configuration could not be loaded")
-                return errors
 
             # Validate required services based on usage
             if config.llm is None:
@@ -228,10 +229,7 @@ class ConfigLoader:
         Returns:
             DatabaseConfig instance or None if not configured.
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.database
+        return self.get_config().database
 
     def get_llm_config(self) -> Optional[LLMConfig]:
         """
@@ -239,14 +237,8 @@ class ConfigLoader:
 
         Returns:
             LLMConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.llm
+        return self.get_config().llm
 
     def get_extraction_config(self) -> Optional[ExtractionConfig]:
         """
@@ -254,14 +246,8 @@ class ConfigLoader:
 
         Returns:
             ExtractionConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.extraction
+        return self.get_config().extraction
 
     def get_microsoft_graph_config(self) -> Optional[MicrosoftGraphConfig]:
         """
@@ -269,14 +255,8 @@ class ConfigLoader:
 
         Returns:
             MicrosoftGraphConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.microsoft_graph
+        return self.get_config().microsoft_graph
 
     def get_email_config(self) -> Optional[EmailConfig]:
         """
@@ -284,14 +264,8 @@ class ConfigLoader:
 
         Returns:
             EmailConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.email
+        return self.get_config().email
 
     def get_queue_config(self) -> Optional[QueueConfig]:
         """
@@ -299,14 +273,8 @@ class ConfigLoader:
 
         Returns:
             QueueConfig instance (always present with defaults)
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.queue
+        return self.get_config().queue
 
     def get_minio_config(self) -> Optional[MinIOConfig]:
         """
@@ -314,14 +282,8 @@ class ConfigLoader:
 
         Returns:
             MinIOConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.minio
+        return self.get_config().minio
 
     def get_playwright_config(self) -> Optional[PlaywrightConfig]:
         """
@@ -329,14 +291,8 @@ class ConfigLoader:
 
         Returns:
             PlaywrightConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.playwright
+        return self.get_config().playwright
 
     def has_llm_config(self) -> bool:
         """Check if LLM configuration is available."""
@@ -362,10 +318,9 @@ class ConfigLoader:
         """
         llm_config = self.get_llm_config()
         if not llm_config:
-            # Return sensible defaults if no config
-            return LLMTaskConfig(
-                model="claude-4-5-sonnet",
-                temperature=DEFAULT_TEMPERATURES.get(task_type, 0.5)
+            raise ValueError(
+                "LLM configuration is required for task type routing. "
+                "Add an 'llm' section to config.yml."
             )
 
         # Check if this task type is configured
@@ -416,12 +371,17 @@ class ConfigLoader:
         """
         Get the default model name from config.
 
-        Returns the default_model from llm config, or a sensible default.
+        Returns the default_model from llm config.
+
+        Raises:
+            ValueError: If LLM configuration is not available
         """
         llm_config = self.get_llm_config()
-        if llm_config:
-            return llm_config.default_model
-        return "claude-4-5-sonnet"
+        if not llm_config:
+            raise ValueError(
+                "LLM configuration is required. Add an 'llm' section to config.yml."
+            )
+        return llm_config.default_model
 
     def get_embedding_dimensions(self) -> Optional[int]:
         """Get configured embedding dimensions, or None if not explicitly set."""
@@ -501,10 +461,7 @@ class ConfigLoader:
         Returns:
             SearchConfig instance or None if not configured
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.search
+        return self.get_config().search
 
     def has_search_config(self) -> bool:
         """Check if search configuration is available and enabled."""
@@ -517,14 +474,8 @@ class ConfigLoader:
 
         Returns:
             SamConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
         """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.sam
+        return self.get_config().sam
 
     def has_sam_config(self) -> bool:
         """Check if SAM.gov configuration is available and enabled."""

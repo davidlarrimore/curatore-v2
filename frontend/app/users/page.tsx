@@ -25,7 +25,7 @@ interface User {
 
 export default function UsersPage() {
   return (
-    <ProtectedRoute requiredRole="org_admin">
+    <ProtectedRoute requiredRole="admin">
       <UsersContent />
     </ProtectedRoute>
   )
@@ -54,8 +54,8 @@ function UsersContent() {
     try {
       const response = await usersApi.listUsers(token)
       setUsers(response.users)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load users')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load users')
     } finally {
       setIsLoading(false)
     }
@@ -78,8 +78,8 @@ function UsersContent() {
     try {
       await usersApi.updateUser(token, userId, { is_active: !isActive })
       await loadUsers()
-    } catch (err: any) {
-      alert(`Failed to update user: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to update user: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -90,8 +90,8 @@ function UsersContent() {
     try {
       await usersApi.deleteUser(token, userId)
       await loadUsers()
-    } catch (err: any) {
-      alert(`Failed to delete user: ${err.message}`)
+    } catch (err: unknown) {
+      alert(`Failed to delete user: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -99,7 +99,7 @@ function UsersContent() {
     switch (role) {
       case 'admin':
         return 'error'
-      case 'user':
+      case 'member':
         return 'info'
       default:
         return 'secondary'

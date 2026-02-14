@@ -173,7 +173,7 @@ export function LeftSidebar({
   ] : []
 
   // Build section items (org context only)
-  const buildNavigation: NavItem[] = isAuthenticated && (user?.role === 'org_admin' || isAdmin) && !isSystemMode ? [
+  const buildNavigation: NavItem[] = isAuthenticated && isAdmin && !isSystemMode ? [
     {
       name: 'Functions',
       href: orgUrl('/admin/functions'),
@@ -205,7 +205,7 @@ export function LeftSidebar({
   ] : []
 
   // Admin section items (org context)
-  const adminNavigation: NavItem[] = isAuthenticated && (user?.role === 'org_admin' || isAdmin) && !isSystemMode ? [
+  const adminNavigation: NavItem[] = isAuthenticated && isAdmin && !isSystemMode ? [
     {
       name: 'Job Manager',
       href: orgUrl('/jobs'),

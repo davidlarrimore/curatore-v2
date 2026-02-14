@@ -34,13 +34,36 @@ export type JobUpdateMessageType =
   | 'initial_state'
   | 'pong'
 
+// Progress data shape from backend
+export interface RunProgressData {
+  phase?: string
+  current?: number
+  total?: number
+  percent?: number
+  unit?: string
+  [key: string]: unknown
+}
+
+// Results summary shape from backend
+export interface RunResultsSummary {
+  name?: string
+  display_name?: string
+  resource_id?: string
+  resource_type?: string
+  group_id?: string
+  total_children?: number
+  completed_children?: number
+  failed_children?: number
+  [key: string]: unknown
+}
+
 // Run status from backend
 export interface RunStatusData {
   run_id: string
   run_type: string
   status: string
-  progress: Record<string, any> | null
-  results_summary: Record<string, any> | null
+  progress: RunProgressData | null
+  results_summary: RunResultsSummary | null
   error_message: string | null
   created_at: string | null
   started_at: string | null
@@ -91,7 +114,7 @@ export interface RunLogData {
   level: string
   event_type: string
   message: string
-  context: Record<string, any> | null
+  context: Record<string, unknown> | null
   created_at: string | null
 }
 
@@ -105,7 +128,7 @@ export interface InitialStateData {
 export interface JobUpdateMessage {
   type: JobUpdateMessageType
   timestamp: string
-  data: RunStatusData | QueueStatsData | RunLogData | InitialStateData | Record<string, any>
+  data: RunStatusData | QueueStatsData | RunLogData | InitialStateData | Record<string, unknown>
 }
 
 // Client configuration

@@ -122,8 +122,9 @@ const SECTION_META: Record<
   },
 }
 
-function renderEmbeddingSection(data: Record<string, any>) {
+function renderEmbeddingSection(data: Record<string, unknown>) {
   const mismatch = data.config_matches_stored === false
+  const storedConfig = data.stored_config as Record<string, unknown> | undefined
   const badge = mismatch ? (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
       <AlertTriangle className="w-3 h-3" />
@@ -138,12 +139,12 @@ function renderEmbeddingSection(data: Record<string, any>) {
 
   return { badge, body: (
     <>
-      <ConfigRow label="Model" value={data.model} />
-      <ConfigRow label="Dimensions" value={data.dimensions} />
-      {data.stored_config && (
+      <ConfigRow label="Model" value={String(data.model ?? '')} />
+      <ConfigRow label="Dimensions" value={String(data.dimensions ?? '')} />
+      {storedConfig && (
         <>
-          <ConfigRow label="Stored Model" value={data.stored_config.model} />
-          <ConfigRow label="Stored Dimensions" value={data.stored_config.dimensions} />
+          <ConfigRow label="Stored Model" value={String(storedConfig.model ?? '')} />
+          <ConfigRow label="Stored Dimensions" value={String(storedConfig.dimensions ?? '')} />
         </>
       )}
       {mismatch && (
@@ -156,30 +157,30 @@ function renderEmbeddingSection(data: Record<string, any>) {
   )}
 }
 
-function renderSearchSection(data: Record<string, any>) {
+function renderSearchSection(data: Record<string, unknown>) {
   return { badge: null, body: (
     <>
       <ConfigRow label="Enabled" value={data.enabled ? 'Yes' : 'No'} />
-      <ConfigRow label="Mode" value={data.default_mode} />
-      <ConfigRow label="Semantic Weight" value={data.semantic_weight} />
-      <ConfigRow label="Chunk Size" value={data.chunk_size} />
-      <ConfigRow label="Chunk Overlap" value={data.chunk_overlap} />
-      <ConfigRow label="Batch Size" value={data.batch_size} />
-      <ConfigRow label="Max Content Length" value={data.max_content_length?.toLocaleString()} />
+      <ConfigRow label="Mode" value={String(data.default_mode ?? '')} />
+      <ConfigRow label="Semantic Weight" value={String(data.semantic_weight ?? '')} />
+      <ConfigRow label="Chunk Size" value={String(data.chunk_size ?? '')} />
+      <ConfigRow label="Chunk Overlap" value={String(data.chunk_overlap ?? '')} />
+      <ConfigRow label="Batch Size" value={String(data.batch_size ?? '')} />
+      <ConfigRow label="Max Content Length" value={typeof data.max_content_length === 'number' ? data.max_content_length.toLocaleString() : undefined} />
     </>
   )}
 }
 
-function renderLLMSection(data: Record<string, any>) {
+function renderLLMSection(data: Record<string, unknown>) {
   return { badge: null, body: (
     <>
-      <ConfigRow label="Provider" value={data.provider} />
-      <ConfigRow label="Default Model" value={data.default_model} />
-      <ConfigRow label="Base URL" value={data.base_url} />
+      <ConfigRow label="Provider" value={String(data.provider ?? '')} />
+      <ConfigRow label="Default Model" value={String(data.default_model ?? '')} />
+      <ConfigRow label="Base URL" value={String(data.base_url ?? '')} />
       <ConfigRow label="Timeout" value={`${data.timeout}s`} />
-      <ConfigRow label="Max Retries" value={data.max_retries} />
+      <ConfigRow label="Max Retries" value={String(data.max_retries ?? '')} />
       <ConfigRow label="Verify SSL" value={data.verify_ssl ? 'Yes' : 'No'} />
-      {data.task_types && data.task_types.length > 0 && (
+      {Array.isArray(data.task_types) && data.task_types.length > 0 && (
         <div className="mt-3">
           <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">Task Types</p>
           <div className="overflow-x-auto">
@@ -193,12 +194,12 @@ function renderLLMSection(data: Record<string, any>) {
                 </tr>
               </thead>
               <tbody>
-                {data.task_types.map((tt: any) => (
-                  <tr key={tt.task_type} className="border-b border-gray-100 dark:border-gray-800 last:border-b-0">
-                    <td className="py-1.5 pr-3 font-medium text-gray-900 dark:text-white">{tt.task_type}</td>
-                    <td className="py-1.5 pr-3 font-mono text-gray-700 dark:text-gray-300">{tt.model}</td>
-                    <td className="py-1.5 pr-3 text-right text-gray-700 dark:text-gray-300">{tt.temperature ?? '—'}</td>
-                    <td className="py-1.5 text-right text-gray-700 dark:text-gray-300">{tt.dimensions ?? '—'}</td>
+                {(data.task_types as Array<Record<string, unknown>>).map((tt) => (
+                  <tr key={String(tt.task_type)} className="border-b border-gray-100 dark:border-gray-800 last:border-b-0">
+                    <td className="py-1.5 pr-3 font-medium text-gray-900 dark:text-white">{String(tt.task_type)}</td>
+                    <td className="py-1.5 pr-3 font-mono text-gray-700 dark:text-gray-300">{String(tt.model)}</td>
+                    <td className="py-1.5 pr-3 text-right text-gray-700 dark:text-gray-300">{tt.temperature != null ? String(tt.temperature) : '—'}</td>
+                    <td className="py-1.5 text-right text-gray-700 dark:text-gray-300">{tt.dimensions != null ? String(tt.dimensions) : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -210,7 +211,7 @@ function renderLLMSection(data: Record<string, any>) {
   )}
 }
 
-function renderGenericSection(data: Record<string, any>) {
+function renderGenericSection(data: Record<string, unknown>) {
   return { badge: null, body: (
     <>
       {Object.entries(data).map(([key, val]) => (
@@ -224,7 +225,7 @@ function renderGenericSection(data: Record<string, any>) {
   )}
 }
 
-function renderSection(key: SectionKey, data: Record<string, any>): { badge: React.ReactNode; body: React.ReactNode } {
+function renderSection(key: SectionKey, data: Record<string, unknown>): { badge: React.ReactNode; body: React.ReactNode } {
   switch (key) {
     case 'embedding':
       return renderEmbeddingSection(data)
@@ -242,7 +243,7 @@ function renderSection(key: SectionKey, data: Record<string, any>): { badge: Rea
 /* ------------------------------------------------------------------ */
 
 export default function SystemSettingsPanel() {
-  const [settings, setSettings] = useState<Record<string, any> | null>(null)
+  const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -252,9 +253,9 @@ export default function SystemSettingsPanel() {
     try {
       const data = await systemApi.getSystemSettings()
       setSettings(data)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load system settings:', err)
-      setError(err.message || 'Failed to load system settings')
+      setError(err instanceof Error ? err.message : 'Failed to load system settings')
     } finally {
       setIsLoading(false)
     }
@@ -315,7 +316,7 @@ export default function SystemSettingsPanel() {
       <div className="grid grid-cols-1 gap-4">
         {SECTION_ORDER.filter((key) => settings[key]).map((key) => {
           const meta = SECTION_META[key]
-          const { badge, body } = renderSection(key, settings[key])
+          const { badge, body } = renderSection(key, settings[key] as Record<string, unknown>)
           return (
             <ConfigSection
               key={key}

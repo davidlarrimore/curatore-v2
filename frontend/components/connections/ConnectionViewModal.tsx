@@ -7,14 +7,14 @@ interface Connection {
   id: string
   name: string
   connection_type: string
-  config: Record<string, any>
+  config: Record<string, unknown>
   is_default: boolean
   is_active: boolean
   is_managed?: boolean
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
-  test_result?: Record<string, any> | null
+  test_result?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -49,7 +49,7 @@ export default function ConnectionViewModal({ connection, onClose }: ConnectionV
   const sensitiveFields = ['client_secret', 'api_key', 'secret', 'password', 'token']
   const isSensitive = (key: string) => sensitiveFields.some(f => key.toLowerCase().includes(f))
 
-  const renderConfigValue = (key: string, value: any) => {
+  const renderConfigValue = (key: string, value: unknown) => {
     if (value === null || value === undefined) return <span className="text-gray-400 italic">Not set</span>
 
     const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value)
@@ -171,7 +171,7 @@ export default function ConnectionViewModal({ connection, onClose }: ConnectionV
                     {connection.test_result.success ? 'Success' : 'Failed'}
                   </span>
                 </div>
-                {connection.test_result.message && (
+                {typeof connection.test_result.message === 'string' && (
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {connection.test_result.message}
                   </p>

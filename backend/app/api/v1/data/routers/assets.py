@@ -305,6 +305,8 @@ async def get_asset_with_extraction(
                 created_at=asset.created_at,
                 updated_at=asset.updated_at,
                 created_by=str(asset.created_by) if asset.created_by else None,
+                extraction_tier=asset.extraction_tier,
+                indexed_at=asset.indexed_at,
             ),
             extraction=ExtractionResultResponse(
                 id=str(extraction.id),
@@ -572,6 +574,8 @@ async def get_asset_versions(
                 created_at=asset.created_at,
                 updated_at=asset.updated_at,
                 created_by=str(asset.created_by) if asset.created_by else None,
+                extraction_tier=asset.extraction_tier,
+                indexed_at=asset.indexed_at,
             ),
             versions=version_responses,
             total_versions=len(versions),

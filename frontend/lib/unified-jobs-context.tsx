@@ -261,9 +261,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
               errorMessage: run.error_message || undefined,
             })
           }
-        } catch (err: any) {
+        } catch (err: unknown) {
           // If run doesn't exist (404) or other error, skip this job
-          console.debug(`Removing stale job ${job.runId}:`, err?.status || err?.message)
+          const errInfo = err as { status?: number; message?: string } | null
+          console.debug(`Removing stale job ${job.runId}:`, errInfo?.status || errInfo?.message)
         }
       }
 
@@ -339,7 +340,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     const isTerminal = ['completed', 'failed', 'cancelled', 'timed_out'].includes(data.status)
 
     // Track what notification to show (determined before state update)
-    let notificationToShow: { type: 'completed' | 'failed' | 'cancelled', jobType: string, displayName: string, error?: string } | null = null
+    let notificationToShow: { type: 'completed' | 'failed' | 'cancelled', jobType: JobType | 'deletion', displayName: string, error?: string } | null = null
 
     setJobs(prev => {
       const existingJob = prev.find(j => j.runId === data.run_id)
@@ -380,11 +381,11 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
       setTimeout(() => {
         const toastId = `job-${notificationToShow!.type}-${data.run_id}`
         if (notificationToShow!.type === 'completed') {
-          notificationService.jobCompleted(notificationToShow!.jobType as any, notificationToShow!.displayName, toastId)
+          notificationService.jobCompleted(notificationToShow!.jobType, notificationToShow!.displayName, toastId)
         } else if (notificationToShow!.type === 'failed') {
-          notificationService.jobFailed(notificationToShow!.jobType as any, notificationToShow!.displayName, notificationToShow!.error, toastId)
+          notificationService.jobFailed(notificationToShow!.jobType, notificationToShow!.displayName, notificationToShow!.error, toastId)
         } else if (notificationToShow!.type === 'cancelled') {
-          notificationService.jobCancelled(notificationToShow!.jobType as any, notificationToShow!.displayName, toastId)
+          notificationService.jobCancelled(notificationToShow!.jobType, notificationToShow!.displayName, toastId)
         }
       }, 0)
     }
@@ -489,11 +490,11 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
                 const run = await runsApi.getRun(job.runId, token!)
                 const toastId = `job-${run.status}-${job.runId}`
                 if (run.status === 'completed') {
-                  notificationService.jobCompleted(job.jobType as any, job.displayName, toastId)
+                  notificationService.jobCompleted(job.jobType, job.displayName, toastId)
                 } else if (run.status === 'failed' || run.status === 'timed_out') {
-                  notificationService.jobFailed(job.jobType as any, job.displayName, run.error_message || undefined, toastId)
+                  notificationService.jobFailed(job.jobType, job.displayName, run.error_message || undefined, toastId)
                 } else if (run.status === 'cancelled') {
-                  notificationService.jobCancelled(job.jobType as any, job.displayName, toastId)
+                  notificationService.jobCancelled(job.jobType, job.displayName, toastId)
                 }
               } catch (err) {
                 // Run doesn't exist or can't be fetched - job was likely removed
@@ -577,8 +578,8 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
           started_at: run.started_at,
           completed_at: run.completed_at,
         })
-      } catch (err: any) {
-        if (err?.status === 404) {
+      } catch (err: unknown) {
+        if ((err as { status?: number } | null)?.status === 404) {
           // Run doesn't exist, remove from tracked jobs
           setJobs(prev => prev.filter(j => j.runId !== job.runId))
         }
@@ -598,10 +599,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
       setQueueStats(stats)
       setLastUpdated(new Date())
       setError(null)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn('Failed to poll queue stats:', err)
       if (!queueStats) {
-        setError(err.message || 'Failed to load queue stats')
+        setError(err instanceof Error ? err.message : 'Failed to load queue stats')
       }
     } finally {
       setIsLoading(false)

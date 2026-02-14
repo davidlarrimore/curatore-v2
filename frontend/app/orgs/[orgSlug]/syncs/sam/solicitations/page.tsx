@@ -263,11 +263,6 @@ export default function SamSolicitationsPage() {
     }
   }, [token, hasConnection, loadSolicitations])
 
-  // Show connection required screen if no SAM.gov connection
-  if (hasConnection === false) {
-    return <SamConnectionRequired />
-  }
-
   // Compute facet counts
   const facetCounts = useMemo(() => {
     const statuses: Record<string, number> = {}
@@ -386,6 +381,11 @@ export default function SamSolicitationsPage() {
   }, [filteredAndSortedSolicitations, page, pageSize])
 
   const totalPages = Math.ceil(filteredAndSortedSolicitations.length / pageSize)
+
+  // Show connection required screen if no SAM.gov connection
+  if (hasConnection === false) {
+    return <SamConnectionRequired />
+  }
 
   // Toggle status filter
   const toggleStatus = (status: string) => {

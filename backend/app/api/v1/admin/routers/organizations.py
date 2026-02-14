@@ -44,7 +44,7 @@ from app.api.v1.admin.schemas import (
 )
 from app.core.database.models import Organization, OrganizationConnection, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, get_current_organization, get_current_user, require_admin, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_organization, get_current_user, require_admin
 
 # Initialize router
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
@@ -117,7 +117,7 @@ async def get_current_user_organization(
 )
 async def update_organization(
     request: OrganizationUpdateRequest,
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> OrganizationResponse:
     """
@@ -249,7 +249,7 @@ async def get_organization_settings(
 )
 async def update_organization_settings(
     request: OrganizationSettingsUpdateRequest,
-    user: User = Depends(require_org_admin_or_above),
+    user: User = Depends(require_admin),
     org_id: UUID = Depends(get_current_org_id),
 ) -> OrganizationSettingsResponse:
     """

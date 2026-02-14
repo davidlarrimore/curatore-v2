@@ -6,10 +6,16 @@ import { AuthProvider } from '@/lib/auth-context'
 import { UnifiedJobsProvider } from '@/lib/unified-jobs-context'
 import { LoadingBar } from '@/components/LoadingBar'
 
-export const metadata = {
+import type { Metadata, Viewport } from 'next'
+
+export const metadata: Metadata = {
   title: 'Curatore v2 - RAG Document Processing',
   description: 'Transform documents into RAG-ready, semantically optimized content',
-  viewport: 'width=device-width, initial-scale=1',
+}
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
 }
 
 interface RootLayoutProps {

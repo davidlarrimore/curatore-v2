@@ -12,7 +12,7 @@
  */
 
 import { Fragment, useState } from 'react'
-import { useRouter, usePathname } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { Menu, Transition } from '@headlessui/react'
 import {
   ChevronDown,
@@ -30,7 +30,6 @@ interface OrganizationSwitcherProps {
 }
 
 export function OrganizationSwitcher({ isSystemMode = false }: OrganizationSwitcherProps) {
-  const router = useRouter()
   const pathname = usePathname()
   const { user, isAdmin } = useAuth()
   const {
@@ -38,8 +37,6 @@ export function OrganizationSwitcher({ isSystemMode = false }: OrganizationSwitc
     availableOrganizations,
     mode,
     isLoading,
-    switchOrganization,
-    switchToSystemContext,
   } = useOrganization()
 
   const [searchQuery, setSearchQuery] = useState('')
@@ -47,28 +44,6 @@ export function OrganizationSwitcher({ isSystemMode = false }: OrganizationSwitc
   // Check if we're currently in URL-based org routing
   const orgSlugMatch = pathname?.match(/^\/orgs\/([^\/]+)/)
   const currentUrlOrgSlug = orgSlugMatch ? orgSlugMatch[1] : null
-
-  // Navigate to an organization using URL-based routing
-  const navigateToOrg = (org: { id: string; slug: string }) => {
-    if (org.slug) {
-      // Set localStorage for API client compatibility
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('curatore_org_context', org.id)
-      }
-      router.push(`/orgs/${org.slug}`)
-    } else {
-      // Fallback: use context-based switching
-      switchOrganization(org.id)
-    }
-  }
-
-  // Navigate to system context
-  const navigateToSystem = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('curatore_org_context', 'system')
-    }
-    router.push('/system')
-  }
 
   // If not authenticated, don't show anything
   if (!user) return null

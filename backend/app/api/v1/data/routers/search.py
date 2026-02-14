@@ -21,7 +21,7 @@ from app.core.search.pg_search_service import pg_search_service
 from app.core.shared.config_loader import config_loader
 from app.core.shared.database_service import database_service
 from app.core.tasks import reindex_organization_task
-from app.dependencies import get_current_org_id, get_current_user, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin
 
 logger = logging.getLogger("curatore.api.search")
 
@@ -452,7 +452,7 @@ async def get_search_stats(
 )
 async def reindex_all_assets(
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin_or_above),
+    current_user: User = Depends(require_admin),
 ) -> ReindexResponse:
     """
     Trigger a full reindex of all assets.

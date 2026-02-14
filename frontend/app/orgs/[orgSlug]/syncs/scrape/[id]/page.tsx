@@ -83,7 +83,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
   const [contentViewerLoading, setContentViewerLoading] = useState(false)
   const [contentCopied, setContentCopied] = useState(false)
 
-  const isAdmin = user?.role === 'org_admin' || user?.role === 'admin'
+  const isAdmin = user?.role === 'admin'
 
   // Helper to build org-scoped URLs
   const orgUrl = (path: string) => `/orgs/${orgSlug}${path}`
@@ -292,7 +292,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
         <div className="text-center">
           <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Not Found</h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">This website configuration doesn't exist.</p>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">This website configuration doesn&apos;t exist.</p>
           <Link
             href={orgUrl('/syncs/scrape')}
             className="inline-flex items-center gap-2 text-emerald-600 dark:text-emerald-400 hover:underline"

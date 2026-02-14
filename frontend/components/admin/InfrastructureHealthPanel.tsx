@@ -10,7 +10,18 @@ import { formatTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
 interface ComponentHealth {
   status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown' | 'not_configured' | 'not_enabled' | 'checking'
   message: string
-  [key: string]: any
+  database_type?: string
+  migration_version?: string
+  database_size_mb?: number
+  version?: string
+  url?: string
+  endpoint?: string
+  model?: string
+  worker_count?: number
+  broker_url?: string
+  queue?: string
+  engine?: string
+  tenant_id?: string
 }
 
 type ComponentKey =
@@ -99,7 +110,8 @@ export default function InfrastructureHealthPanel() {
     setComponents(buildCheckingState())
 
     try {
-      const data = await systemApi.getComprehensiveHealth()
+      const rawData = await systemApi.getComprehensiveHealth()
+      const data = rawData as { components?: Record<string, ComponentHealth> }
       const newComponents = buildCheckingState()
 
       if (data.components) {
@@ -137,11 +149,12 @@ export default function InfrastructureHealthPanel() {
 
     // Retest via the comprehensive endpoint to get fresh data for this component
     try {
-      const data = await systemApi.getComprehensiveHealth()
+      const rawData = await systemApi.getComprehensiveHealth()
+      const data = rawData as { components?: Record<string, ComponentHealth> }
       if (data.components && data.components[key]) {
         setComponents(prev => ({
           ...prev,
-          [key]: data.components[key]
+          [key]: data.components![key]
         }))
       }
     } catch (error) {

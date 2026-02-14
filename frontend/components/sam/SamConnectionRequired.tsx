@@ -52,7 +52,7 @@ export default function SamConnectionRequired({ className = '' }: SamConnectionR
                   Get a SAM.gov API Key
                 </h3>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  Register for a free API key from the SAM.gov developer portal. You'll need a SAM.gov account.
+                  Register for a free API key from the SAM.gov developer portal. You&apos;ll need a SAM.gov account.
                 </p>
                 <a
                   href="https://open.gsa.gov/api/sam-entity-management/#getting-started"

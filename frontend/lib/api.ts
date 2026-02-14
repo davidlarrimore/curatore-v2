@@ -15,6 +15,13 @@ import type {
 } from '@/types'
 import { validateDocumentId, DocumentIdError } from './validators'
 
+/**
+ * Type alias for dynamic JSON data from API responses.
+ * Uses a permissive record type to avoid excessive type narrowing
+ * for inherently dynamic API response structures.
+ */
+type JsonRecord = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export const API_PATH_VERSION = 'v1' as const
 const ACCESS_TOKEN_KEY = 'curatore_access_token'
@@ -70,10 +77,10 @@ function getOrganizationContext(): string | null {
 }
 
 
-function httpError(res: Response, message?: string, detail?: any): never {
+function httpError(res: Response, message?: string, detail?: unknown): never {
   const err = new Error(message || res.statusText || `Request failed with ${res.status}`)
-  ;(err as any).status = res.status
-  if (detail !== undefined) (err as any).detail = detail
+  ;(err as unknown as JsonRecord).status = res.status
+  if (detail !== undefined) (err as unknown as JsonRecord).detail = detail
   // Note: 401 dispatch is handled by apiFetch — not duplicated here
   throw err
 }
@@ -128,7 +135,7 @@ async function apiFetch(pathOrUrl: string, options: ApiFetchOptions = {}): Promi
 
 async function handleJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    let body: any = undefined
+    let body: JsonRecord | undefined = undefined
     try { body = await res.json() } catch {}
     let msg = res.statusText
     if (body) {
@@ -137,7 +144,7 @@ async function handleJson<T>(res: Response): Promise<T> {
         msg = detail
       } else if (Array.isArray(detail)) {
         // Pydantic validation errors - extract messages
-        msg = detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+        msg = detail.map((e: JsonRecord) => e.msg || JSON.stringify(e)).join('; ')
       } else if (detail) {
         msg = JSON.stringify(detail)
       }
@@ -173,9 +180,9 @@ function validateAndEncodeDocumentId(documentId: string): string {
 
 // -------------------- System API --------------------
 export const systemApi = {
-  async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
+  async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & JsonRecord> {
     const res = await apiFetch('/admin/system/health/comprehensive', { cache: 'no-store' })
-    const data = await handleJson(res)
+    const data = await handleJson<JsonRecord>(res)
     return {
       ...data,
       status: data.overall_status ?? 'unknown',
@@ -195,7 +202,7 @@ export const systemApi = {
 
   async getBackendHealth(): Promise<{ status: string; version: string }> {
     const res = await apiFetch('/admin/system/health/backend', { cache: 'no-store' })
-    const data = await handleJson(res)
+    const data = await handleJson<JsonRecord>(res)
     return { status: data.status ?? 'unknown', version: data.version ?? '' }
   },
 
@@ -232,7 +239,7 @@ export const systemApi = {
 
   async getLLMStatus(): Promise<LLMConnectionStatus> {
     const res = await apiFetch('/admin/system/health/llm', { cache: 'no-store' })
-    const data = await handleJson(res)
+    const data = await handleJson<JsonRecord>(res)
     return {
       connected: data.status === 'healthy',
       endpoint: data.endpoint ?? '',
@@ -248,36 +255,36 @@ export const systemApi = {
     return handleJson(res)
   },
 
-  async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & Record<string, any>> {
+  async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & JsonRecord> {
     const res = await apiFetch('/admin/system/queues', { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
+  async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & JsonRecord> {
     const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('job_ids', jobIds.join(','))
     const res = await apiFetch(url.toString(), { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
+  async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & JsonRecord> {
     const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('batch_id', batchId)
     const res = await apiFetch(url.toString(), { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getComprehensiveHealth(): Promise<any> {
+  async getComprehensiveHealth(): Promise<JsonRecord> {
     const res = await apiFetch('/admin/system/health/comprehensive', { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'llm' | 'sharepoint'): Promise<any> {
+  async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'llm' | 'sharepoint'): Promise<JsonRecord> {
     const res = await apiFetch(`/admin/system/health/${component}`, { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getSystemSettings(): Promise<Record<string, any>> {
+  async getSystemSettings(): Promise<JsonRecord> {
     const res = await apiFetch('/admin/config/system-settings', { cache: 'no-store' })
     return handleJson(res)
   },
@@ -373,7 +380,7 @@ export const fileApi = {
     // Align with BulkDownloadRequest while keeping backward compatibility
     // Model: { document_ids, download_type, include_summary, include_combined, custom_filename }
     // Some routers still reference `zip_name`, so send both.
-    const body: Record<string, any> = {
+    const body: JsonRecord = {
       document_ids: documentIds,
       download_type: downloadType,
       include_summary: includeSummary,
@@ -408,7 +415,7 @@ export interface Organization {
   display_name: string
   slug: string
   is_active: boolean
-  settings?: Record<string, any>
+  settings?: JsonRecord
   created_at?: string
   updated_at?: string
 }
@@ -485,7 +492,7 @@ export const organizationsApi = {
     name: string
     display_name: string
     slug: string
-    settings?: Record<string, any>
+    settings?: JsonRecord
   }): Promise<OrganizationAdmin> {
     const res = await apiFetch('/admin/organizations', {
       method: 'POST',
@@ -639,7 +646,7 @@ export const utils = {
  * Map v1 API response to frontend ProcessingResult format
  * Handles backward compatibility and field mapping
  */
-function mapV1ResultToFrontend(raw: any): ProcessingResult {
+function mapV1ResultToFrontend(raw: JsonRecord): ProcessingResult {
   // Safely extract conversion score with fallback logic
   const conversion_score = raw.conversion_result?.conversion_score ?? 0
   return {
@@ -665,8 +672,8 @@ function mapV1ResultToFrontend(raw: any): ProcessingResult {
  * Map frontend options to v1 API format
  * Aligns with backend V1ProcessingOptions: { auto_optimize, extraction_engine, quality_thresholds: { conversion, clarity, completeness, relevance, markdown } }
  */
-function mapOptionsToV1(options: any): any {
-  const v1: any = {
+function mapOptionsToV1(options: JsonRecord): JsonRecord {
+  const v1: JsonRecord = {
     auto_optimize: options?.auto_optimize ?? true,
   }
 
@@ -731,7 +738,7 @@ export const runsApi = {
     limit?: number
     offset?: number
   }): Promise<{
-    items: any[]
+    items: JsonRecord[]
     total: number
     limit: number
     offset: number
@@ -957,7 +964,7 @@ export interface ActiveJob {
   queue_position: number | null
 
   // For other job types
-  config: Record<string, any> | null
+  config: JsonRecord | null
 
   // Capabilities (computed from queue_registry)
   can_cancel: boolean
@@ -1167,7 +1174,7 @@ export const authApi = {
   }): Promise<{
     access_token: string
     refresh_token: string
-    user: any
+    user: JsonRecord
   }> {
     const res = await apiFetch('/admin/auth/register', {
       method: 'POST',
@@ -1251,7 +1258,7 @@ export const connectionsApi = {
       id: string
       name: string
       connection_type: string
-      config: Record<string, any>
+      config: JsonRecord
       is_default: boolean
       is_active: boolean
       last_tested_at?: string
@@ -1267,7 +1274,7 @@ export const connectionsApi = {
     return handleJson(res)
   },
 
-  async getConnection(token: string, connectionId: string): Promise<any> {
+  async getConnection(token: string, connectionId: string): Promise<JsonRecord> {
     const res = await apiFetch(`/admin/connections/${connectionId}`, {
       
       cache: 'no-store',
@@ -1278,10 +1285,10 @@ export const connectionsApi = {
   async createConnection(token: string, data: {
     name: string
     connection_type: string
-    config: Record<string, any>
+    config: JsonRecord
     is_default?: boolean
     test_on_save?: boolean
-  }): Promise<any> {
+  }): Promise<JsonRecord> {
     const res = await apiFetch('/admin/connections', {
       method: 'POST',
       headers: jsonHeaders,
@@ -1292,10 +1299,10 @@ export const connectionsApi = {
 
   async updateConnection(token: string, connectionId: string, data: {
     name?: string
-    config?: Record<string, any>
+    config?: JsonRecord
     is_active?: boolean
     test_on_save?: boolean
-  }): Promise<any> {
+  }): Promise<JsonRecord> {
     const res = await apiFetch(`/admin/connections/${connectionId}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -1316,7 +1323,7 @@ export const connectionsApi = {
     success: boolean
     message?: string
     health_status?: 'healthy' | 'unhealthy'
-    details?: any
+    details?: JsonRecord
     error?: string
   }> {
     const res = await apiFetch(`/admin/connections/${connectionId}/test`, {
@@ -1339,8 +1346,8 @@ export const connectionsApi = {
       type: string
       display_name: string
       description: string
-      config_schema: any
-      example_config: Record<string, any>
+      config_schema: JsonRecord
+      example_config: JsonRecord
     }>
   }> {
     const res = await apiFetch('/admin/connections/types', {
@@ -1353,7 +1360,7 @@ export const connectionsApi = {
     provider: string
     base_url: string
     api_key: string
-    [key: string]: any
+    [key: string]: unknown
   }): Promise<{
     success: boolean
     models: string[]
@@ -1381,7 +1388,7 @@ export const connectionsApi = {
       name: string
       description?: string | null
       connection_type: string
-      config: Record<string, any>
+      config: JsonRecord
       is_active: boolean
       is_default: boolean
       is_managed: boolean
@@ -1413,7 +1420,7 @@ export const connectionsApi = {
 // -------------------- Settings API --------------------
 export const settingsApi = {
   async getOrganizationSettings(token: string): Promise<{
-    settings: Record<string, any>
+    settings: JsonRecord
   }> {
     const res = await apiFetch('/admin/organizations/me/settings', {
             cache: 'no-store',
@@ -1421,8 +1428,8 @@ export const settingsApi = {
     return handleJson(res)
   },
 
-  async updateOrganizationSettings(token: string, settings: Record<string, any>): Promise<{
-    settings: Record<string, any>
+  async updateOrganizationSettings(token: string, settings: JsonRecord): Promise<{
+    settings: JsonRecord
   }> {
     const res = await apiFetch('/admin/organizations/me/settings', {
       method: 'PUT',
@@ -1433,7 +1440,7 @@ export const settingsApi = {
   },
 
   async getUserSettings(token: string): Promise<{
-    settings: Record<string, any>
+    settings: JsonRecord
   }> {
     const res = await apiFetch('/admin/users/me/settings', {
             cache: 'no-store',
@@ -1441,8 +1448,8 @@ export const settingsApi = {
     return handleJson(res)
   },
 
-  async updateUserSettings(token: string, settings: Record<string, any>): Promise<{
-    settings: Record<string, any>
+  async updateUserSettings(token: string, settings: JsonRecord): Promise<{
+    settings: JsonRecord
   }> {
     const res = await apiFetch('/admin/users/me/settings', {
       method: 'PUT',
@@ -1875,7 +1882,7 @@ export const usersApi = {
     return handleJson(res)
   },
 
-  async getUser(token: string, userId: string): Promise<any> {
+  async getUser(token: string, userId: string): Promise<JsonRecord> {
     const res = await apiFetch(`/admin/organizations/me/users/${userId}`, {
       
       cache: 'no-store',
@@ -1891,7 +1898,7 @@ export const usersApi = {
     send_email?: boolean
   }): Promise<{
     message: string
-    user: any
+    user: JsonRecord
     temporary_password?: string
   }> {
     const res = await apiFetch('/admin/organizations/me/users', {
@@ -1910,7 +1917,7 @@ export const usersApi = {
     is_active?: boolean
   }): Promise<{
     message: string
-    user: any
+    user: JsonRecord
   }> {
     const res = await apiFetch(`/admin/organizations/me/users/${userId}`, {
       method: 'PUT',
@@ -2018,7 +2025,7 @@ export interface Asset {
   id: string
   organization_id: string
   source_type: string
-  source_metadata: Record<string, any>
+  source_metadata: JsonRecord
   original_filename: string
   content_type: string | null
   file_size: number | null
@@ -2065,7 +2072,7 @@ export interface ExtractionResult {
   status: string
   extracted_bucket: string | null
   extracted_object_key: string | null
-  structure_metadata: Record<string, any> | null
+  structure_metadata: JsonRecord | null
   warnings: string[]
   errors: string[]
   extraction_time_seconds: number | null
@@ -2085,9 +2092,9 @@ export interface Run {
   origin: string
   status: string
   input_asset_ids: string[]
-  config: Record<string, any>
-  progress: Record<string, any> | null
-  results_summary: Record<string, any> | null
+  config: JsonRecord
+  progress: JsonRecord | null
+  results_summary: JsonRecord | null
   error_message: string | null
   created_at: string
   started_at: string | null
@@ -2105,7 +2112,7 @@ export interface RunLogEvent {
   level: string
   event_type: string
   message: string
-  context: Record<string, any> | null
+  context: JsonRecord | null
   created_at: string
 }
 
@@ -2215,7 +2222,7 @@ export interface AssetMetadata {
   producer_run_id: string | null
   is_canonical: boolean
   status: string
-  metadata_content: Record<string, any>
+  metadata_content: JsonRecord
   metadata_object_ref: string | null
   created_at: string
   promoted_at: string | null
@@ -2232,7 +2239,7 @@ export interface AssetMetadataList {
 
 export interface AssetMetadataCreateRequest {
   metadata_type: string
-  metadata_content: Record<string, any>
+  metadata_content: JsonRecord
   schema_version?: string
   is_canonical?: boolean
   producer_run_id?: string
@@ -2488,11 +2495,11 @@ export interface ScrapeCollection {
   collection_mode: 'snapshot' | 'record_preserving'
   root_url: string
   url_patterns: Array<{ type: 'include' | 'exclude'; pattern: string }>
-  crawl_config: Record<string, any>
+  crawl_config: JsonRecord
   status: 'active' | 'paused' | 'archived' | 'deleting'
   last_crawl_at: string | null
   last_crawl_run_id: string | null
-  stats: Record<string, any>
+  stats: JsonRecord
   created_at: string
   updated_at: string
   created_by: string | null
@@ -2504,7 +2511,7 @@ export interface ScrapeSource {
   url: string
   source_type: 'seed' | 'discovered' | 'manual'
   is_active: boolean
-  crawl_config: Record<string, any> | null
+  crawl_config: JsonRecord | null
   last_crawl_at: string | null
   last_status: string | null
   discovered_pages: number
@@ -2526,7 +2533,7 @@ export interface ScrapedAsset {
   is_promoted: boolean
   promoted_at: string | null
   promoted_by: string | null
-  scrape_metadata: Record<string, any>
+  scrape_metadata: JsonRecord
   created_at: string
   updated_at: string
   original_filename: string | null
@@ -2550,7 +2557,7 @@ export interface ScrapeCollectionCreateRequest {
   collection_mode?: 'snapshot' | 'record_preserving'
   description?: string
   url_patterns?: Array<{ type: 'include' | 'exclude'; pattern: string }>
-  crawl_config?: Record<string, any>
+  crawl_config?: JsonRecord
 }
 
 export interface ScrapeCollectionUpdateRequest {
@@ -2558,15 +2565,15 @@ export interface ScrapeCollectionUpdateRequest {
   description?: string
   collection_mode?: 'snapshot' | 'record_preserving'
   url_patterns?: Array<{ type: 'include' | 'exclude'; pattern: string }>
-  crawl_config?: Record<string, any>
+  crawl_config?: JsonRecord
   status?: 'active' | 'paused' | 'archived'
 }
 
 export interface CrawlStatus {
   run_id: string
   status: string
-  progress: Record<string, any> | null
-  results_summary: Record<string, any> | null
+  progress: JsonRecord | null
+  results_summary: JsonRecord | null
   error_message: string | null
 }
 
@@ -2692,7 +2699,7 @@ export const scrapeApi = {
   /**
    * Add a source to a collection
    */
-  async addSource(token: string | undefined, collectionId: string, url_source: string, sourceType: string = 'seed', crawlConfig?: Record<string, any>): Promise<ScrapeSource> {
+  async addSource(token: string | undefined, collectionId: string, url_source: string, sourceType: string = 'seed', crawlConfig?: JsonRecord): Promise<ScrapeSource> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/sources`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -2812,7 +2819,7 @@ export interface ScheduledTask {
   schedule_expression: string
   schedule_description: string
   enabled: boolean
-  config: Record<string, any>
+  config: JsonRecord
   last_run_id: string | null
   last_run_at: string | null
   last_run_status: string | null
@@ -2842,7 +2849,7 @@ export interface TaskRun {
   created_at: string
   started_at: string | null
   completed_at: string | null
-  results_summary: Record<string, any> | null
+  results_summary: JsonRecord | null
   error_message: string | null
 }
 
@@ -2928,7 +2935,7 @@ export const scheduledTasksApi = {
   /**
    * Trigger a scheduled task immediately
    */
-  async triggerTask(token: string | undefined, taskId: string, configOverrides?: Record<string, any>): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
+  async triggerTask(token: string | undefined, taskId: string, configOverrides?: JsonRecord): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}/trigger`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -2979,8 +2986,8 @@ export interface SearchRequest {
   sync_config_ids?: string[]
   date_from?: string
   date_to?: string
-  metadata_filters?: Record<string, any>
-  facet_filters?: Record<string, any>
+  metadata_filters?: JsonRecord
+  facet_filters?: JsonRecord
   limit?: number
   offset?: number
   include_facets?: boolean
@@ -3054,7 +3061,7 @@ export interface SearchHealthResponse {
  */
 export interface MetadataFieldSchema {
   type: string
-  sample_values: any[]
+  sample_values: JsonRecord[]
   filterable: boolean
 }
 
@@ -3182,7 +3189,7 @@ export interface SearchCollection {
   slug: string
   description?: string | null
   collection_type: string
-  query_config?: Record<string, unknown> | null
+  query_config?: JsonRecord | null
   source_type?: string | null
   source_id?: string | null
   is_active: boolean
@@ -3203,7 +3210,7 @@ export interface VectorSync {
   last_sync_at?: string | null
   error_message?: string | null
   chunks_synced: number
-  sync_config?: Record<string, unknown> | null
+  sync_config?: JsonRecord | null
   created_at?: string | null
   updated_at?: string | null
 }
@@ -3252,7 +3259,7 @@ export const collectionsApi = {
       name: string
       description?: string
       collection_type?: string
-      query_config?: Record<string, unknown>
+      query_config?: JsonRecord
       source_type?: string
       source_id?: string
     }
@@ -3273,7 +3280,7 @@ export const collectionsApi = {
       name?: string
       description?: string
       collection_type?: string
-      query_config?: Record<string, unknown>
+      query_config?: JsonRecord
       is_active?: boolean
     }
   ): Promise<SearchCollection> {
@@ -3306,7 +3313,7 @@ export const collectionsApi = {
   async addVectorSync(
     token: string | undefined,
     collectionId: string,
-    data: { connection_id: string; sync_config?: Record<string, unknown> }
+    data: { connection_id: string; sync_config?: JsonRecord }
   ): Promise<VectorSync> {
     const url = apiUrl(`/data/collections/${collectionId}/syncs`)
     const res = await apiFetch(url, {
@@ -3400,7 +3407,7 @@ export interface MetadataFieldDefinition {
   facetable: boolean
   applicable_content_types: string[]
   description?: string
-  examples?: any[]
+  examples?: JsonRecord[]
 }
 
 /**
@@ -3449,7 +3456,7 @@ export interface MetadataCatalog {
 export interface MetadataFieldStats {
   namespace: string
   field_name: string
-  sample_values: any[]
+  sample_values: JsonRecord[]
   doc_count: number
 }
 
@@ -3462,7 +3469,7 @@ export interface MetadataFieldCreateRequest {
   facetable?: boolean
   applicable_content_types?: string[]
   description?: string
-  examples?: any[]
+  examples?: JsonRecord[]
   sensitivity_tag?: string
 }
 
@@ -3471,7 +3478,7 @@ export interface MetadataFieldUpdateRequest {
   facetable?: boolean
   applicable_content_types?: string[]
   description?: string
-  examples?: any[]
+  examples?: JsonRecord[]
   sensitivity_tag?: string
   status?: string
 }
@@ -3530,7 +3537,7 @@ export interface FacetDiscoverResult {
   facet_name: string
   unmapped_count: number
   unmapped_values: Array<{ value: string; count: number }>
-  suggestions: any[]
+  suggestions: JsonRecord[]
   error?: string
 }
 
@@ -3597,7 +3604,7 @@ export const metadataApi = {
 
   // -- Write Operations --
 
-  async createField(token: string | undefined, namespace: string, data: MetadataFieldCreateRequest): Promise<any> {
+  async createField(token: string | undefined, namespace: string, data: MetadataFieldCreateRequest): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/fields/${namespace}`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3607,7 +3614,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async updateField(token: string | undefined, namespace: string, fieldName: string, data: MetadataFieldUpdateRequest): Promise<any> {
+  async updateField(token: string | undefined, namespace: string, fieldName: string, data: MetadataFieldUpdateRequest): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
     const res = await apiFetch(url, {
       method: 'PATCH',
@@ -3617,7 +3624,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async deleteField(token: string | undefined, namespace: string, fieldName: string): Promise<any> {
+  async deleteField(token: string | undefined, namespace: string, fieldName: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
     const res = await apiFetch(url, {
       method: 'DELETE',
@@ -3626,7 +3633,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async createFacet(token: string | undefined, data: FacetCreateRequest): Promise<any> {
+  async createFacet(token: string | undefined, data: FacetCreateRequest): Promise<JsonRecord> {
     const url = apiUrl('/data/metadata/facets')
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3636,7 +3643,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async updateFacet(token: string | undefined, facetName: string, data: FacetUpdateRequest): Promise<any> {
+  async updateFacet(token: string | undefined, facetName: string, data: FacetUpdateRequest): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}`)
     const res = await apiFetch(url, {
       method: 'PATCH',
@@ -3646,7 +3653,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async deleteFacet(token: string | undefined, facetName: string): Promise<any> {
+  async deleteFacet(token: string | undefined, facetName: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}`)
     const res = await apiFetch(url, {
       method: 'DELETE',
@@ -3655,7 +3662,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async addFacetMapping(token: string | undefined, facetName: string, data: FacetMappingCreateRequest): Promise<any> {
+  async addFacetMapping(token: string | undefined, facetName: string, data: FacetMappingCreateRequest): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/mappings`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3665,7 +3672,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async removeFacetMapping(token: string | undefined, facetName: string, contentType: string): Promise<any> {
+  async removeFacetMapping(token: string | undefined, facetName: string, contentType: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/mappings/${contentType}`)
     const res = await apiFetch(url, {
       method: 'DELETE',
@@ -3674,7 +3681,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async invalidateCache(token: string | undefined): Promise<any> {
+  async invalidateCache(token: string | undefined): Promise<JsonRecord> {
     const url = apiUrl('/data/metadata/cache/invalidate')
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3701,7 +3708,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async createReferenceValue(token: string | undefined, facetName: string, data: { canonical_value: string; display_label?: string; description?: string; aliases?: string[] }): Promise<any> {
+  async createReferenceValue(token: string | undefined, facetName: string, data: { canonical_value: string; display_label?: string; description?: string; aliases?: string[] }): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3711,7 +3718,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async updateReferenceValue(token: string | undefined, facetName: string, valueId: string, data: { canonical_value?: string; display_label?: string; description?: string; sort_order?: number; status?: string }): Promise<any> {
+  async updateReferenceValue(token: string | undefined, facetName: string, valueId: string, data: { canonical_value?: string; display_label?: string; description?: string; sort_order?: number; status?: string }): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
     const res = await apiFetch(url, {
       method: 'PATCH',
@@ -3721,7 +3728,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async deleteReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+  async deleteReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
     const res = await apiFetch(url, {
       method: 'DELETE',
@@ -3730,7 +3737,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async addReferenceAlias(token: string | undefined, facetName: string, valueId: string, data: { alias_value: string; source_hint?: string }): Promise<any> {
+  async addReferenceAlias(token: string | undefined, facetName: string, valueId: string, data: { alias_value: string; source_hint?: string }): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3740,7 +3747,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async removeReferenceAlias(token: string | undefined, facetName: string, valueId: string, aliasId: string): Promise<any> {
+  async removeReferenceAlias(token: string | undefined, facetName: string, valueId: string, aliasId: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases/${aliasId}`)
     const res = await apiFetch(url, {
       method: 'DELETE',
@@ -3758,7 +3765,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async approveReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+  async approveReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/approve`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3767,7 +3774,7 @@ export const metadataApi = {
     return handleJson(res)
   },
 
-  async rejectReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+  async rejectReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<JsonRecord> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/reject`)
     const res = await apiFetch(url, {
       method: 'POST',
@@ -3822,7 +3829,7 @@ export interface SamSearch {
   name: string
   slug: string
   description: string | null
-  search_config: Record<string, any>
+  search_config: JsonRecord
   status: 'active' | 'paused' | 'archived'
   is_active: boolean
   last_pull_at: string | null
@@ -3868,7 +3875,7 @@ export interface SamSolicitation {
   posted_date: string | null
   response_deadline: string | null
   ui_link: string | null
-  contact_info: Record<string, any> | null
+  contact_info: JsonRecord | null
   // Organization hierarchy (parsed from fullParentPathName: AGENCY.BUREAU.OFFICE)
   agency_name: string | null
   bureau_name: string | null
@@ -3882,7 +3889,7 @@ export interface SamSolicitation {
   summary_status?: 'pending' | 'generating' | 'ready' | 'failed' | 'no_llm' | null
   summary_generated_at?: string | null
   // Raw SAM.gov API response (for metadata tab)
-  raw_data?: Record<string, any> | null
+  raw_data?: JsonRecord | null
 }
 
 // Phase 7.6: Dashboard stats
@@ -3967,7 +3974,7 @@ export interface SamNotice {
   // Is this a standalone notice?
   is_standalone: boolean
   // Raw SAM.gov API response (for metadata tab)
-  raw_data?: Record<string, any> | null
+  raw_data?: JsonRecord | null
 }
 
 export interface SamAttachment {
@@ -3992,8 +3999,8 @@ export interface SamSummary {
   is_canonical: boolean
   model: string
   summary: string
-  key_requirements: Array<Record<string, any>> | null
-  compliance_checklist: Array<Record<string, any>> | null
+  key_requirements: Array<JsonRecord> | null
+  compliance_checklist: Array<JsonRecord> | null
   confidence_score: number | null
   token_count: number | null
   created_at: string
@@ -4025,7 +4032,7 @@ export interface SamQueueStats {
 export interface SamApiStatus {
   usage: SamApiUsage
   queue: SamQueueStats
-  history: Array<Record<string, any>>
+  history: Array<JsonRecord>
 }
 
 export interface SamPreviewResult {
@@ -4116,7 +4123,7 @@ export const samApi = {
   async createSearch(token: string | undefined, data: {
     name: string
     description?: string
-    search_config: Record<string, any>
+    search_config: JsonRecord
     pull_frequency?: string
   }): Promise<SamSearch> {
     console.log('[SAM API] createSearch - Request:', data)
@@ -4133,7 +4140,7 @@ export const samApi = {
   async updateSearch(token: string | undefined, searchId: string, data: {
     name?: string
     description?: string
-    search_config?: Record<string, any>
+    search_config?: JsonRecord
     status?: string
     is_active?: boolean
     pull_frequency?: string
@@ -4160,14 +4167,14 @@ export const samApi = {
   async triggerPull(token: string | undefined, searchId: string, params?: {
     max_pages?: number
     page_size?: number
-  }): Promise<Record<string, any>> {
+  }): Promise<JsonRecord> {
     console.log('[SAM API] triggerPull - Request:', { searchId, params })
     const res = await apiFetch(`/data/sam/searches/${searchId}/pull`, {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify(params || {}),
     })
-    const result = await handleJson(res) as Record<string, any>
+    const result = await handleJson(res) as JsonRecord
     console.log('[SAM API] triggerPull - Response:', result)
     return result
   },
@@ -4192,14 +4199,14 @@ export const samApi = {
   },
 
   async previewSearch(token: string | undefined, data: {
-    search_config: Record<string, any>
+    search_config: JsonRecord
     limit?: number
   }): Promise<{
     success: boolean
     total_matching?: number
     sample_count?: number
     sample_results?: SamPreviewResult[]
-    search_config?: Record<string, any>
+    search_config?: JsonRecord
     message: string
     error?: string
     remaining_calls?: number
@@ -4215,7 +4222,7 @@ export const samApi = {
       total_matching?: number
       sample_count?: number
       sample_results?: SamPreviewResult[]
-      search_config?: Record<string, any>
+      search_config?: JsonRecord
       message: string
       error?: string
       remaining_calls?: number
@@ -4341,7 +4348,7 @@ export const samApi = {
     return handleJson(res)
   },
 
-  async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<Record<string, any>> {
+  async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<JsonRecord> {
     const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/download-attachments`, {
       method: 'POST',
       
@@ -4511,7 +4518,7 @@ export const samApi = {
   },
 
   async getUsageHistory(token: string | undefined, days: number = 30): Promise<{
-    items: Array<Record<string, any>>
+    items: Array<JsonRecord>
     days: number
   }> {
     const res = await apiFetch(`/data/sam/usage/history?days=${days}`, {
@@ -4521,7 +4528,7 @@ export const samApi = {
   },
 
   async estimateImpact(token: string | undefined, data: {
-    search_config: Record<string, any>
+    search_config: JsonRecord
     max_pages?: number
     page_size?: number
   }): Promise<{
@@ -4607,14 +4614,14 @@ export interface SharePointSyncConfig {
   folder_drive_id: string | null
   folder_item_id: string | null
   site_name: string | null
-  sync_config: Record<string, any>
+  sync_config: JsonRecord
   status: string
   is_active: boolean
   last_sync_at: string | null
   last_sync_status: string | null
   last_sync_run_id: string | null
   sync_frequency: string
-  stats: Record<string, any>
+  stats: JsonRecord
   created_at: string
   updated_at: string
   created_by: string | null
@@ -4645,7 +4652,7 @@ export interface SharePointSyncedDocument {
   last_synced_at: string | null
   last_sync_run_id: string | null
   deleted_detected_at: string | null
-  sync_metadata: Record<string, any>
+  sync_metadata: JsonRecord
   created_at: string
   updated_at: string
   original_filename: string | null
@@ -4710,7 +4717,7 @@ export const sharepointSyncApi = {
       description?: string
       connection_id?: string
       folder_url: string
-      sync_config?: Record<string, any>
+      sync_config?: JsonRecord
       sync_frequency?: string
       site_name?: string
     }
@@ -4729,7 +4736,7 @@ export const sharepointSyncApi = {
     data: {
       name?: string
       description?: string
-      sync_config?: Record<string, any>
+      sync_config?: JsonRecord
       status?: string
       is_active?: boolean
       sync_frequency?: string
@@ -4819,9 +4826,9 @@ export const sharepointSyncApi = {
       run_type: string
       origin: string
       status: string
-      config: Record<string, any>
-      progress: Record<string, any> | null
-      results_summary: Record<string, any> | null
+      config: JsonRecord
+      progress: JsonRecord | null
+      results_summary: JsonRecord | null
       error_message: string | null
       created_at: string
       started_at: string | null
@@ -4986,18 +4993,19 @@ export interface FunctionParameter {
   type: string
   description: string
   required: boolean
-  default?: any
+  default?: unknown
   enum_values?: string[]
-  example?: any
+  example?: unknown
 }
 
 export interface FunctionMeta {
   name: string
   description: string
   category: string
-  input_schema: Record<string, any>
-  output_schema: Record<string, any>
-  examples?: Array<Record<string, any>>
+  input_schema: JsonRecord
+  output_schema: JsonRecord
+  output_variants?: Array<JsonRecord>
+  examples?: Array<JsonRecord>
   tags: string[]
   is_async: boolean
   version: string
@@ -5007,7 +5015,7 @@ export interface FunctionMeta {
   side_effects?: boolean
   is_primitive?: boolean
   payload_profile?: string
-  exposure_profile?: Record<string, any>
+  exposure_profile?: JsonRecord
 }
 
 /**
@@ -5019,7 +5027,7 @@ export function getParametersFromSchema(meta: FunctionMeta): FunctionParameter[]
   if (!schema || !schema.properties) return []
 
   const required: string[] = schema.required || []
-  return Object.entries(schema.properties).map(([name, prop]: [string, any]) => {
+  return Object.entries(schema.properties as Record<string, JsonRecord>).map(([name, prop]) => {
     // Map JSON Schema type to the simple type strings the UI expects
     let type = prop.type || 'string'
     if (type === 'array') {
@@ -5067,9 +5075,9 @@ export interface FunctionListResponse {
 export interface FunctionExecuteResult {
   status: string
   message?: string
-  data?: any
+  data?: unknown
   error?: string
-  metadata?: Record<string, any>
+  metadata?: JsonRecord
   items_processed?: number
   items_failed?: number
   duration_ms?: number
@@ -5100,7 +5108,7 @@ export const functionsApi = {
   async executeFunction(
     token: string | undefined,
     name: string,
-    params: Record<string, any> = {},
+    params: JsonRecord = {},
     dryRun: boolean = false
   ): Promise<FunctionExecuteResult> {
     const res = await apiFetch(`/cwr/functions/${name}/execute`, {
@@ -5121,12 +5129,12 @@ export interface ToolContract {
   description: string
   category: string
   version: string
-  input_schema: Record<string, any>
-  output_schema: Record<string, any>
+  input_schema: JsonRecord
+  output_schema: JsonRecord
   side_effects: boolean
   is_primitive: boolean
   payload_profile: string
-  exposure_profile: Record<string, any>
+  exposure_profile: JsonRecord
   requires_llm: boolean
   requires_session: boolean
   tags: string[]
@@ -5160,14 +5168,14 @@ export const contractsApi = {
     return handleJson(res)
   },
 
-  async getInputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
+  async getInputSchema(token: string | undefined, name: string): Promise<JsonRecord> {
     const res = await apiFetch(`/cwr/contracts/${name}/input-schema`, {
             cache: 'no-store',
     })
     return handleJson(res)
   },
 
-  async getOutputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
+  async getOutputSchema(token: string | undefined, name: string): Promise<JsonRecord> {
     const res = await apiFetch(`/cwr/contracts/${name}/output-schema`, {
             cache: 'no-store',
     })
@@ -5184,7 +5192,7 @@ export interface ProcedureTrigger {
   trigger_type: string
   cron_expression?: string
   event_name?: string
-  event_filter?: Record<string, any>
+  event_filter?: JsonRecord
   is_active: boolean  // Whether this trigger fires on schedule
   last_triggered_at?: string
   next_trigger_at?: string
@@ -5217,7 +5225,7 @@ export interface Procedure {
   is_active: boolean
   is_system: boolean
   source_type: string
-  definition: Record<string, any>
+  definition: JsonRecord
   triggers: ProcedureTrigger[]
   created_at: string
   updated_at: string
@@ -5227,13 +5235,13 @@ export interface ProcedureRunResponse {
   run_id?: string
   status: string
   message?: string
-  results?: Record<string, any>
+  results?: JsonRecord
 }
 
 export interface ProcedureStep {
   name: string
   function: string
-  params: Record<string, any>
+  params: JsonRecord
   on_error?: string
   condition?: string
   description?: string
@@ -5246,7 +5254,7 @@ export interface ProcedureParameter {
   type?: string
   description?: string
   required?: boolean
-  default?: any
+  default?: unknown
   enum_values?: string[]
 }
 
@@ -5275,7 +5283,7 @@ export interface ValidationError {
   code: string
   message: string
   path: string
-  details: Record<string, any>
+  details: JsonRecord
 }
 
 export interface ValidationResult {
@@ -5324,15 +5332,15 @@ export interface GenerateStreamEvent {
   message?: string
   // tool_call events
   tool?: string
-  args?: Record<string, any>
+  args?: JsonRecord
   call_index?: number
   // tool_result events
   summary?: string
   // complete event
   success?: boolean
   yaml?: string
-  procedure?: Record<string, any>
-  plan_json?: Record<string, any>
+  procedure?: JsonRecord
+  plan_json?: JsonRecord
   error?: string
   attempts?: number
   validation_errors?: ValidationError[]
@@ -5369,7 +5377,7 @@ export const proceduresApi = {
   async runProcedure(
     token: string | undefined,
     slug: string,
-    params: Record<string, any> = {},
+    params: JsonRecord = {},
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<ProcedureRunResponse> {
@@ -5411,8 +5419,8 @@ export const proceduresApi = {
       trigger_type: string
       cron_expression?: string
       event_name?: string
-      event_filter?: Record<string, any>
-      trigger_params?: Record<string, any>
+      event_filter?: JsonRecord
+      trigger_params?: JsonRecord
     }
   ): Promise<ProcedureTrigger> {
     const res = await apiFetch(`/cwr/procedures/${slug}/triggers`, {
@@ -5502,13 +5510,13 @@ export const proceduresApi = {
     token: string | undefined,
     prompt: string,
     profile?: string,
-    currentPlan?: Record<string, any>,
+    currentPlan?: JsonRecord,
     onEvent?: (event: GenerateStreamEvent) => void,
   ): Promise<{
     success: boolean
     yaml?: string
-    procedure?: Record<string, any>
-    plan_json?: Record<string, any>
+    procedure?: JsonRecord
+    plan_json?: JsonRecord
     error?: string
     attempts: number
     validation_errors: ValidationError[]
@@ -5518,7 +5526,7 @@ export const proceduresApi = {
     needs_clarification?: boolean
     clarification_message?: string
   }> {
-    const body: Record<string, any> = {
+    const body: JsonRecord = {
       prompt,
       include_examples: true,
     }
@@ -5547,7 +5555,7 @@ export const proceduresApi = {
 
     const decoder = new TextDecoder()
     let buffer = ''
-    let finalResult: any = null
+    let finalResult: JsonRecord | null = null
     let currentEventType = ''
 
     while (true) {
@@ -5602,7 +5610,12 @@ export const proceduresApi = {
     }
 
     if (finalResult) {
-      return finalResult
+      return finalResult as {
+        success: boolean; yaml?: string; procedure?: JsonRecord; plan_json?: JsonRecord;
+        error?: string; attempts: number; validation_errors: ValidationError[];
+        validation_warnings?: ValidationError[]; profile_used?: string;
+        diagnostics?: PlanDiagnostics; needs_clarification?: boolean; clarification_message?: string;
+      }
     }
 
     throw new Error('Stream ended without complete event')
@@ -5617,10 +5630,10 @@ export const proceduresApi = {
 
   async validateDraft(
     token: string | undefined,
-    plan: Record<string, any>,
+    plan: JsonRecord,
     profile?: string
   ): Promise<ValidationResult> {
-    const body: Record<string, any> = { plan }
+    const body: JsonRecord = { plan }
     if (profile) {
       body.profile = profile
     }
@@ -5651,7 +5664,7 @@ export interface PipelineTrigger {
   trigger_type: string
   cron_expression?: string
   event_name?: string
-  event_filter?: Record<string, any>
+  event_filter?: JsonRecord
   is_active: boolean
   last_triggered_at?: string
   next_trigger_at?: string
@@ -5695,7 +5708,7 @@ export interface PipelineRun {
   status: string
   current_stage: number
   items_processed: number
-  stage_results?: Record<string, any>
+  stage_results?: JsonRecord
   error_message?: string
   started_at?: string
   completed_at?: string
@@ -5708,7 +5721,7 @@ export interface PipelineItemState {
   item_id: string
   stage_name: string
   status: string
-  stage_data?: Record<string, any>
+  stage_data?: JsonRecord
   error_message?: string
   started_at?: string
   completed_at?: string
@@ -5719,7 +5732,7 @@ export interface PipelineRunResponse {
   pipeline_run_id?: string
   status: string
   message?: string
-  results?: Record<string, any>
+  results?: JsonRecord
 }
 
 export const pipelinesApi = {
@@ -5747,7 +5760,7 @@ export const pipelinesApi = {
   async runPipeline(
     token: string | undefined,
     slug: string,
-    params: Record<string, any> = {},
+    params: JsonRecord = {},
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<PipelineRunResponse> {
@@ -5837,8 +5850,8 @@ export const pipelinesApi = {
       trigger_type: string
       cron_expression?: string
       event_name?: string
-      event_filter?: Record<string, any>
-      trigger_params?: Record<string, any>
+      event_filter?: JsonRecord
+      trigger_params?: JsonRecord
     }
   ): Promise<PipelineTrigger> {
     const res = await apiFetch(`/cwr/pipelines/${slug}/triggers`, {
@@ -5892,9 +5905,9 @@ export interface SalesforceAccount {
   description: string | null
   website: string | null
   phone: string | null
-  billing_address: Record<string, any> | null
-  shipping_address: Record<string, any> | null
-  small_business_flags: Record<string, any> | null
+  billing_address: JsonRecord | null
+  shipping_address: JsonRecord | null
+  small_business_flags: JsonRecord | null
   indexed_at: string | null
   created_at: string
   updated_at: string
@@ -5915,7 +5928,7 @@ export interface SalesforceContact {
   mobile_phone: string | null
   department: string | null
   is_current_employee: boolean | null
-  mailing_address: Record<string, any> | null
+  mailing_address: JsonRecord | null
   created_at: string
   updated_at: string
   account_name?: string
@@ -5939,7 +5952,7 @@ export interface SalesforceOpportunity {
   fiscal_year: string | null
   fiscal_quarter: string | null
   description: string | null
-  custom_dates: Record<string, any> | null
+  custom_dates: JsonRecord | null
   linked_sharepoint_folder_id: string | null
   linked_sam_solicitation_id: string | null
   indexed_at: string | null
@@ -6176,8 +6189,8 @@ export interface ForecastSync {
   status: 'active' | 'paused' | 'archived'
   is_active: boolean
   sync_frequency: 'manual' | 'hourly' | 'daily'
-  filter_config: Record<string, any>
-  automation_config: Record<string, any>
+  filter_config: JsonRecord
+  automation_config: JsonRecord
   last_sync_at: string | null
   last_sync_status: string | null
   last_sync_run_id: string | null
@@ -6198,24 +6211,24 @@ export interface ForecastSyncListResponse {
 export interface ForecastSyncCreateRequest {
   name: string
   source_type: 'ag' | 'apfs' | 'state'
-  filter_config?: Record<string, any>
+  filter_config?: JsonRecord
   sync_frequency?: 'manual' | 'hourly' | 'daily'
-  automation_config?: Record<string, any>
+  automation_config?: JsonRecord
 }
 
 export interface ForecastSyncUpdateRequest {
   name?: string
-  filter_config?: Record<string, any>
+  filter_config?: JsonRecord
   status?: 'active' | 'paused' | 'archived'
   is_active?: boolean
   sync_frequency?: 'manual' | 'hourly' | 'daily'
-  automation_config?: Record<string, any>
+  automation_config?: JsonRecord
 }
 
 export interface ForecastHistoryEntry {
   version: number
   sync_date: string
-  data: Record<string, any>
+  data: JsonRecord
 }
 
 export interface Forecast {
@@ -6422,11 +6435,11 @@ export interface Service {
   name: string
   service_type: string
   description?: string
-  config: Record<string, any>
+  config: JsonRecord
   is_active: boolean
   last_tested_at?: string
   test_status?: string
-  test_result?: Record<string, any>
+  test_result?: JsonRecord
   created_at: string
   updated_at: string
 }
@@ -6468,7 +6481,7 @@ export const servicesApi = {
     name: string
     service_type: string
     description?: string
-    config?: Record<string, any>
+    config?: JsonRecord
     is_active?: boolean
   }): Promise<Service> {
     const res = await apiFetch('/admin/services', {
@@ -6481,7 +6494,7 @@ export const servicesApi = {
 
   async update(token: string, serviceId: string, data: {
     description?: string
-    config?: Record<string, any>
+    config?: JsonRecord
     is_active?: boolean
   }): Promise<Service> {
     const res = await apiFetch(`/admin/services/${serviceId}`, {
@@ -6855,13 +6868,13 @@ export const systemCwrApi = {
   async generateProcedureStream(
     prompt: string,
     profile?: string,
-    currentPlan?: Record<string, any>,
+    currentPlan?: JsonRecord,
     onEvent?: (event: GenerateStreamEvent) => void,
   ): Promise<{
     success: boolean
     yaml?: string
-    procedure?: Record<string, any>
-    plan_json?: Record<string, any>
+    procedure?: JsonRecord
+    plan_json?: JsonRecord
     error?: string
     attempts: number
     validation_errors: ValidationError[]
@@ -6871,7 +6884,7 @@ export const systemCwrApi = {
     needs_clarification?: boolean
     clarification_message?: string
   }> {
-    const body: Record<string, any> = { prompt, include_examples: true }
+    const body: JsonRecord = { prompt, include_examples: true }
     if (profile) body.profile = profile
     if (currentPlan) body.current_plan = currentPlan
 
@@ -6890,7 +6903,7 @@ export const systemCwrApi = {
 
     const decoder = new TextDecoder()
     let buffer = ''
-    let finalResult: any = null
+    let finalResult: JsonRecord | null = null
 
     while (true) {
       const { done, value } = await reader.read()
@@ -6915,7 +6928,12 @@ export const systemCwrApi = {
       }
     }
 
-    if (finalResult) return finalResult
+    if (finalResult) return finalResult as {
+      success: boolean; yaml?: string; procedure?: JsonRecord; plan_json?: JsonRecord;
+      error?: string; attempts: number; validation_errors: ValidationError[];
+      validation_warnings?: ValidationError[]; profile_used?: string;
+      diagnostics?: PlanDiagnostics; needs_clarification?: boolean; clarification_message?: string;
+    }
     throw new Error('Stream ended without complete event')
   },
 
@@ -6933,7 +6951,7 @@ export const systemCwrApi = {
 
   async createTrigger(slug: string, data: {
     trigger_type: string; cron_expression?: string; event_name?: string;
-    event_filter?: Record<string, any>; trigger_params?: Record<string, any>
+    event_filter?: JsonRecord; trigger_params?: JsonRecord
   }): Promise<ProcedureTrigger> {
     const res = await this._fetch(`/cwr/procedures/${slug}/triggers`, {
       method: 'POST', headers: jsonHeaders, body: JSON.stringify(data),
@@ -6948,17 +6966,17 @@ export const systemCwrApi = {
 
   // ---- Versions ----
 
-  async listVersions(slug: string): Promise<any[]> {
+  async listVersions(slug: string): Promise<JsonRecord[]> {
     const res = await this._fetch(`/cwr/procedures/${slug}/versions`, { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async getVersion(slug: string, version: number): Promise<any> {
+  async getVersion(slug: string, version: number): Promise<JsonRecord> {
     const res = await this._fetch(`/cwr/procedures/${slug}/versions/${version}`, { cache: 'no-store' })
     return handleJson(res)
   },
 
-  async restoreVersion(slug: string, version: number): Promise<any> {
+  async restoreVersion(slug: string, version: number): Promise<JsonRecord> {
     const res = await this._fetch(`/cwr/procedures/${slug}/versions/${version}/restore`, { method: 'POST' })
     return handleJson(res)
   },
@@ -6978,7 +6996,7 @@ export const systemCwrApi = {
     return handleJson(res)
   },
 
-  async updatePipeline(slug: string, data: any): Promise<Pipeline> {
+  async updatePipeline(slug: string, data: JsonRecord): Promise<Pipeline> {
     const res = await this._fetch(`/cwr/pipelines/${slug}`, {
       method: 'PUT', headers: jsonHeaders, body: JSON.stringify(data),
     })

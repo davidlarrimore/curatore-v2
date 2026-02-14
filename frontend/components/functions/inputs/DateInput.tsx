@@ -85,7 +85,7 @@ export function DateInput({ param, value, onChange, disabled }: DateInputProps) 
       </div>
       {isToday && (
         <p className="text-xs text-indigo-600 dark:text-indigo-400">
-          Using dynamic "today" value ({todayDate})
+          Using dynamic &quot;today&quot; value ({todayDate})
         </p>
       )}
     </div>
