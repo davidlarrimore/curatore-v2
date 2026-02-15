@@ -35,6 +35,7 @@ from app.core.metadata.registry_service import (
     MANAGEABLE_DATA_SOURCE_TYPES,
     metadata_registry_service,
 )
+from app.config import SYSTEM_ORG_SLUG
 from app.core.shared.database_service import database_service
 from app.dependencies import get_current_org_id, get_current_user, require_admin
 
@@ -70,7 +71,8 @@ async def list_data_connections(
         # Count total active orgs
         total_orgs_result = await session.execute(
             select(func.count()).select_from(Organization).where(
-                Organization.is_active == True
+                Organization.is_active == True,
+                Organization.slug != SYSTEM_ORG_SLUG,
             )
         )
         total_orgs = total_orgs_result.scalar() or 0

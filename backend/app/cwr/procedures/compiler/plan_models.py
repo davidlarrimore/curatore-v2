@@ -274,6 +274,10 @@ TYPED_PLAN_JSON_SCHEMA: Dict[str, Any] = {
             "minItems": 1,
             "items": {"$ref": "#/$defs/step"},
         },
+        "explanation": {
+            "type": "string",
+            "description": "Brief conversational summary of the procedure and key design choices",
+        },
     },
     "additionalProperties": False,
     "$defs": {

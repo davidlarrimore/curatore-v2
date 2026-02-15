@@ -206,12 +206,12 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       }
 
       // Check for clarification
-      const resultWithClarification = result as unknown as { needs_clarification?: boolean; clarification_message?: string }
+      const resultWithClarification = result as unknown as { needs_clarification?: boolean; clarification_message?: string; explanation?: string }
       if (resultWithClarification.needs_clarification && resultWithClarification.clarification_message) {
         assistantEntry.content = resultWithClarification.clarification_message
         setConversation(prev => [...prev, assistantEntry])
       } else if (result.success && result.yaml) {
-        assistantEntry.content = 'Procedure generated successfully.'
+        assistantEntry.content = resultWithClarification.explanation || 'Procedure generated successfully.'
         setConversation(prev => [...prev, assistantEntry])
         onYamlGenerated(result.yaml)
         onSuccess?.(
@@ -360,6 +360,23 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
                   : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100'
               }`}>
                 <div className="whitespace-pre-wrap">{entry.content}</div>
+
+                {/* Summary card for successful generations */}
+                {entry.role === 'assistant' && entry.diagnostics && entry.diagnostics.tools_referenced && entry.diagnostics.tools_referenced.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                      {entry.diagnostics.tools_referenced.length} {entry.diagnostics.tools_referenced.length === 1 ? 'step' : 'steps'}
+                    </span>
+                    {entry.diagnostics.tools_referenced.map((fn: string) => (
+                      <span key={fn} className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-mono text-[11px]">
+                        {fn}
+                      </span>
+                    ))}
+                    <span className="text-gray-400 dark:text-gray-500">
+                      {entry.diagnostics.total_attempts} attempt{entry.diagnostics.total_attempts !== 1 ? 's' : ''} &middot; {(entry.diagnostics.timing_ms / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Progress log for assistant messages */}

@@ -568,7 +568,7 @@ fields:
         "Statement of Work": "Government-issued or company-drafted performance requirements documents including SOWs, PWSs, SOOs, and associated WBS or CDRLs."
         "Contract Deliverable": "A deliverable produced under contract such as a technical report, systems engineering artifact, program/project plan, transition plan, or final deliverable — distinct from routine status reporting."
         "Status Report": "Recurring program/project status reports, monthly/weekly reports, SIPRs, CDR/SDR outputs, financial status reports, or EVM deliverables."
-        "Teaming Agreement": "Teaming agreements (TAs), non-disclosure agreements (NDAs), memoranda of understanding (MOUs), or other pre-award partnering documents tied to a specific opportunity."
+        "Teaming Agreement": "Teaming agreements (TAs), memoranda of understanding (MOUs), or other pre-award partnering documents tied to a specific opportunity."
         "Correspondence": "Letters, emails, meeting minutes, or formal correspondence with government clients, teammates, or subcontractors — including cure notices and show-cause letters."
         "Presentation": "Slide decks, briefings, oral presentation materials, or demo materials not submitted as part of a formal proposal."
         "Pricing & Cost Data": "Standalone cost models, basis of estimates (BOEs), rate builds, wrap rate calculations, subcontractor quotes, or price analysis workbooks — when not embedded in a proposal volume."

@@ -10,7 +10,6 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { useOrganization } from '@/lib/organization-context'
 
 export default function SystemLayout({
   children,
@@ -19,7 +18,6 @@ export default function SystemLayout({
 }) {
   const router = useRouter()
   const { isAdmin, isLoading: authLoading } = useAuth()
-  const { mode, switchToSystemContext } = useOrganization()
 
   useEffect(() => {
     // Wait for auth to load
@@ -30,12 +28,7 @@ export default function SystemLayout({
       router.push('/')
       return
     }
-
-    // Auto-switch to system context when entering /system routes
-    if (mode !== 'system') {
-      switchToSystemContext()
-    }
-  }, [isAdmin, authLoading, mode, router, switchToSystemContext])
+  }, [isAdmin, authLoading, router])
 
   // Show loading state while checking auth
   if (authLoading) {

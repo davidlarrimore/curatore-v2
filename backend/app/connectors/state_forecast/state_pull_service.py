@@ -153,14 +153,33 @@ class StatePullService:
                     f"Downloaded {len(excel_content)} bytes"
                 )
 
+            # Step 2b: File-level change detection — skip if identical file
+            file_hash = hashlib.sha256(excel_content).hexdigest()
+            last_file_hash = filter_config.get("_last_file_hash")
+            if last_file_hash and file_hash == last_file_hash:
+                if run_id:
+                    await run_log_service.log_event(
+                        session, run_id, "INFO", "file_unchanged",
+                        f"File hash unchanged ({file_hash[:16]}…), skipping processing"
+                    )
+                stats["skipped_reason"] = "file_unchanged"
+                return stats
+
             # Step 3: Parse Excel file
-            rows = self._parse_excel(excel_content)
+            rows, file_metadata = self._parse_excel(excel_content)
             stats["total_rows"] = len(rows)
+            stats["file_metadata"] = file_metadata
 
             if run_id:
+                meta_parts = []
+                if file_metadata.get("modified"):
+                    meta_parts.append(f"modified={file_metadata['modified']}")
+                if file_metadata.get("creator"):
+                    meta_parts.append(f"creator={file_metadata['creator']}")
+                meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
                 await run_log_service.log_event(
                     session, run_id, "INFO", "parse_complete",
-                    f"Parsed {len(rows)} data rows"
+                    f"Parsed {len(rows)} data rows{meta_suffix}"
                 )
 
             # Step 4: Process each row
@@ -241,6 +260,17 @@ class StatePullService:
             # Update sync stats
             count = await state_forecast_service.count_by_sync(session, sync_id)
             await forecast_sync_service.update_forecast_count(session, sync_id, count)
+
+            # Store file hash so the next sync can skip if file is unchanged.
+            # Uses _ prefix to distinguish from user-facing filter keys.
+            updated_config = dict(filter_config)
+            updated_config["_last_file_hash"] = file_hash
+            updated_config["_last_file_url"] = excel_url
+            updated_config["_last_file_size"] = len(excel_content)
+            updated_config["_last_file_synced_at"] = datetime.utcnow().isoformat()
+            await forecast_sync_service.update_sync(
+                session, sync_id, filter_config=updated_config
+            )
 
             if run_id:
                 filtered_msg = f", {stats['filtered_out']} filtered" if stats['filtered_out'] else ""
@@ -390,8 +420,6 @@ class StatePullService:
         except PlaywrightError as e:
             logger.error(f"Playwright render failed: {e}")
             raise
-        finally:
-            await client.aclose()
 
     async def _find_excel_link_with_regex(self) -> Optional[str]:
         """
@@ -442,7 +470,7 @@ class StatePullService:
             response.raise_for_status()
             return response.content
 
-    def _parse_excel(self, content: bytes) -> List[Dict[str, Any]]:
+    def _parse_excel(self, content: bytes) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Parse Excel file content into row dictionaries.
 
@@ -450,7 +478,7 @@ class StatePullService:
             content: Excel file bytes
 
         Returns:
-            List of row dictionaries
+            Tuple of (row dictionaries, workbook metadata dict)
         """
         try:
             import openpyxl
@@ -460,6 +488,21 @@ class StatePullService:
         # Load workbook from bytes
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
         ws = wb.active
+
+        # Extract workbook metadata for observability
+        props = wb.properties
+        file_metadata: Dict[str, Any] = {}
+        if props:
+            if props.title:
+                file_metadata["title"] = props.title
+            if props.creator:
+                file_metadata["creator"] = props.creator
+            if props.lastModifiedBy:
+                file_metadata["last_modified_by"] = props.lastModifiedBy
+            if props.created:
+                file_metadata["created"] = props.created.isoformat() if hasattr(props.created, "isoformat") else str(props.created)
+            if props.modified:
+                file_metadata["modified"] = props.modified.isoformat() if hasattr(props.modified, "isoformat") else str(props.modified)
 
         rows = []
         headers = None
@@ -482,7 +525,7 @@ class StatePullService:
 
             rows.append(row_dict)
 
-        return rows
+        return rows, file_metadata
 
     def _normalize_header(self, header: str) -> str:
         """Normalize column header to snake_case."""
@@ -497,7 +540,9 @@ class StatePullService:
         """
         Compute hash to identify unique rows.
 
-        Uses title + NAICS + fiscal_year + estimated_value as identity.
+        Uses title + NAICS + fiscal_year as identity.  estimated_value is
+        excluded because it's a free-text string that changes as forecasts
+        mature, which would create orphaned records instead of updates.
         """
         # Try multiple possible column names for each field
         title = (
@@ -519,14 +564,7 @@ class StatePullService:
             row.get("award_fiscal_year") or
             ""
         )
-        value = (
-            row.get("estimated_value") or
-            row.get("value") or
-            row.get("dollar_value") or
-            row.get("estimated_total_value") or
-            ""
-        )
-        identity_fields = [str(title), str(naics), str(fy), str(value)]
+        identity_fields = [str(title), str(naics), str(fy)]
         return hashlib.sha256("|".join(identity_fields).encode()).hexdigest()
 
     def _parse_row(

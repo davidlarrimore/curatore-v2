@@ -78,12 +78,11 @@ async def _execute_procedure_async(
     from app.core.shared.run_service import run_service
     from app.cwr.procedures import procedure_executor
 
+    # Main session: start_run + execute
     async with database_service.get_session() as session:
-        # Start the run
         await run_service.start_run(session, run_id)
         await session.commit()
 
-        # Execute the procedure
         result = await procedure_executor.execute(
             session=session,
             organization_id=organization_id,
@@ -94,22 +93,23 @@ async def _execute_procedure_async(
             organization_ids=organization_ids,
         )
 
-        # Complete or fail the run based on result
+    # Fresh session: status update (healthy connection guaranteed after long runs)
+    async with database_service.get_session() as status_session:
         if result.get("status") == "completed":
             await run_service.complete_run(
-                session=session,
-                run_id=run_id,
+                status_session,
+                run_id,
                 results_summary=result,
             )
         else:
             await run_service.fail_run(
-                session=session,
-                run_id=run_id,
+                status_session,
+                run_id,
                 error_message=result.get("error", "Procedure failed"),
             )
+        await status_session.commit()
 
-        await session.commit()
-        return result
+    return result
 
 
 async def _fail_procedure_run(run_id, error: str) -> None:

@@ -571,8 +571,13 @@ class ProcedureExecutor:
                     "status": flow_result.get("status"),
                     "flow_type": step.function,
                     "duration_ms": flow_result.get("duration_ms"),
-                    "output": flow_result.get("data"),
+                    "message": flow_result.get("message"),
                 }
+                # Add summary counters (foreach/parallel) instead of full data
+                for key in ("items_processed", "items_failed", "items_skipped",
+                            "branch", "branches_executed", "branches_failed"):
+                    if key in flow_result:
+                        flow_log_context[key] = flow_result[key]
                 if item_index is not None:
                     flow_log_context["item_index"] = item_index
                 await ctx.log_run_event(
@@ -764,6 +769,7 @@ class ProcedureExecutor:
                         user_id=ctx.user_id,
                         run_id=ctx.run_id,
                         dry_run=ctx.dry_run,
+                        is_system_context=ctx.is_system_context,
                     )
                     # Copy step results from parent context
                     for key, value in ctx.variables.items():
@@ -902,6 +908,7 @@ class ProcedureExecutor:
                             user_id=ctx.user_id,
                             run_id=ctx.run_id,
                             dry_run=ctx.dry_run,
+                            is_system_context=ctx.is_system_context,
                         )
                         # Copy step results from parent context so templates can reference them
                         for key, value in ctx.variables.items():
@@ -1201,7 +1208,7 @@ class ProcedureExecutor:
                     except Exception as e:
                         logger.warning(f"Failed to calculate next trigger time: {e}")
 
-            await session.commit()
+            await session.flush()
             logger.debug(f"Updated {len(triggers)} trigger(s) for procedure {procedure_slug}")
 
         except Exception as e:

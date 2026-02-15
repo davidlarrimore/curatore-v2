@@ -5354,6 +5354,8 @@ export interface GenerateStreamEvent {
   validation_warnings?: ValidationError[]
   profile_used?: string
   diagnostics?: PlanDiagnostics
+  // explanation
+  explanation?: string
   // clarification
   needs_clarification?: boolean
   clarification_message?: string
@@ -5530,6 +5532,7 @@ export const proceduresApi = {
     validation_warnings?: ValidationError[]
     profile_used?: string
     diagnostics?: PlanDiagnostics
+    explanation?: string
     needs_clarification?: boolean
     clarification_message?: string
   }> {
@@ -5599,6 +5602,7 @@ export const proceduresApi = {
                 validation_warnings: parsed.validation_warnings,
                 profile_used: parsed.profile_used,
                 diagnostics: parsed.diagnostics,
+                explanation: parsed.explanation,
                 needs_clarification: parsed.needs_clarification,
                 clarification_message: parsed.clarification_message,
               }
@@ -5621,7 +5625,8 @@ export const proceduresApi = {
         success: boolean; yaml?: string; procedure?: JsonRecord; plan_json?: JsonRecord;
         error?: string; attempts: number; validation_errors: ValidationError[];
         validation_warnings?: ValidationError[]; profile_used?: string;
-        diagnostics?: PlanDiagnostics; needs_clarification?: boolean; clarification_message?: string;
+        diagnostics?: PlanDiagnostics; explanation?: string;
+        needs_clarification?: boolean; clarification_message?: string;
       }
     }
 
@@ -6916,6 +6921,7 @@ export const systemCwrApi = {
     validation_warnings?: ValidationError[]
     profile_used?: string
     diagnostics?: PlanDiagnostics
+    explanation?: string
     needs_clarification?: boolean
     clarification_message?: string
   }> {
@@ -6975,6 +6981,7 @@ export const systemCwrApi = {
                 validation_warnings: parsed.validation_warnings,
                 profile_used: parsed.profile_used,
                 diagnostics: parsed.diagnostics,
+                explanation: parsed.explanation,
                 needs_clarification: parsed.needs_clarification,
                 clarification_message: parsed.clarification_message,
               }
@@ -6996,7 +7003,8 @@ export const systemCwrApi = {
       success: boolean; yaml?: string; procedure?: JsonRecord; plan_json?: JsonRecord;
       error?: string; attempts: number; validation_errors: ValidationError[];
       validation_warnings?: ValidationError[]; profile_used?: string;
-      diagnostics?: PlanDiagnostics; needs_clarification?: boolean; clarification_message?: string;
+      diagnostics?: PlanDiagnostics; explanation?: string;
+      needs_clarification?: boolean; clarification_message?: string;
     }
     throw new Error('Stream ended without complete event')
   },

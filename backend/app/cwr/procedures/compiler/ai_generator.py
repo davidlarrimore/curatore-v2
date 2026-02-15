@@ -320,6 +320,9 @@ class ProcedureGeneratorService:
                 attempts=plan_attempt,
             )
 
+        # Extract explanation before compilation (compiler ignores it, but we pass it through)
+        explanation = plan_dict.pop("explanation", None)
+
         # =================================================================
         # Compilation Phase (no repair loop — compiler bugs are bugs)
         # =================================================================
@@ -385,6 +388,7 @@ class ProcedureGeneratorService:
             "validation_warnings": proc_warnings,
             "profile_used": gen_profile.name.value,
             "diagnostics": diagnostics.to_dict(),
+            "explanation": explanation,
         }
 
         return result

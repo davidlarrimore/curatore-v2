@@ -56,22 +56,6 @@ def compute_change_hash(data: Dict[str, Any], key_fields: List[str]) -> str:
     return hashlib.sha256("|".join(values).encode()).hexdigest()[:16]
 
 
-def compute_row_hash(row_data: Dict[str, Any]) -> str:
-    """
-    Compute hash to identify unique rows.
-
-    Uses title + NAICS + fiscal_year + estimated_value as identity.
-    This allows detecting the same forecast across file updates.
-    """
-    identity_fields = [
-        str(row_data.get("title", "")),
-        str(row_data.get("naics_code", "")),
-        str(row_data.get("fiscal_year", "")),
-        str(row_data.get("estimated_value", "")),
-    ]
-    return hashlib.sha256("|".join(identity_fields).encode()).hexdigest()
-
-
 def build_history_entry(
     version: int,
     data: Dict[str, Any],
@@ -189,6 +173,8 @@ class StateForecastService:
             existing.raw_data = raw_data
 
             # Build full snapshot of ALL meaningful fields
+            # Note: source_file/source_row excluded — they change with each
+            # Excel file version and would cause spurious history entries.
             history_data = {
                 "title": title,
                 "description": description,
@@ -207,8 +193,6 @@ class StateForecastService:
                 "anticipated_award_type": anticipated_award_type,
                 "facility_clearance": facility_clearance,
                 "awarded_contract_order": awarded_contract_order,
-                "source_file": source_file,
-                "source_row": source_row,
             }
 
             # History: append if ANY field changed (decoupled from change_hash)
@@ -252,8 +236,6 @@ class StateForecastService:
                 "anticipated_award_type": anticipated_award_type,
                 "facility_clearance": facility_clearance,
                 "awarded_contract_order": awarded_contract_order,
-                "source_file": source_file,
-                "source_row": source_row,
             }
             initial_history = [build_history_entry(1, history_data, now)]
 

@@ -136,6 +136,25 @@ class GetContentFunction(BaseFunction):
             result = await ctx.session.execute(query)
             assets = result.scalars().all()
 
+            if not assets and uuid_ids:
+                # Diagnostic: log when query returns empty for valid-looking IDs
+                from sqlalchemy import text
+                try:
+                    diag = await ctx.session.execute(
+                        text("SELECT COUNT(*) FROM assets WHERE id = :aid"),
+                        {"aid": str(uuid_ids[0])},
+                    )
+                    raw_count = diag.scalar()
+                except Exception as diag_e:
+                    raw_count = f"ERROR: {diag_e}"
+                logger.warning(
+                    f"get_content: ORM query returned 0 assets for {len(uuid_ids)} IDs. "
+                    f"IDs: {[str(u) for u in uuid_ids[:3]]}. "
+                    f"Raw SQL count for first ID: {raw_count}. "
+                    f"org_id={ctx.organization_id}, "
+                    f"is_system={ctx.is_system_context}"
+                )
+
             # Build response
             results = []
             for asset in assets:

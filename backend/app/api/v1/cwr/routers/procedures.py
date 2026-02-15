@@ -405,6 +405,7 @@ async def generate_procedure(
                     "validation_warnings": result.get("validation_warnings", []),
                     "profile_used": result.get("profile_used"),
                     "diagnostics": result.get("diagnostics"),
+                    "explanation": result.get("explanation"),
                 }
                 if result.get("needs_clarification"):
                     complete_event["needs_clarification"] = True

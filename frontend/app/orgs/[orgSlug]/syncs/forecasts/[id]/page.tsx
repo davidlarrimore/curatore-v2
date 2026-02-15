@@ -30,6 +30,10 @@ interface PageProps {
   params: Promise<{ orgSlug: string; id: string }>
 }
 
+// Fields to hide from history display — source metadata changes with each
+// Excel file version and isn't meaningful for change tracking.
+const HISTORY_HIDDEN_FIELDS = new Set(['source_file', 'source_row'])
+
 // Inline breadcrumbs component with org-scoped URLs
 function ForecastBreadcrumbs({
   items,
@@ -486,7 +490,7 @@ function ForecastDetailContent({ params }: PageProps) {
                       <div className="px-4 pb-4 border-t border-gray-100 dark:border-gray-700 pt-3">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
                           {Object.entries(entry.data)
-                            .filter(([, v]) => v != null && v !== '')
+                            .filter(([k, v]) => v != null && v !== '' && !HISTORY_HIDDEN_FIELDS.has(k))
                             .map(([key, value]) => (
                               <div key={key} className="flex flex-col py-1">
                                 <span className="text-xs text-gray-500 dark:text-gray-400">
