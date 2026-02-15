@@ -615,7 +615,7 @@ The system procedures list filters to `source_type === "system"` (file-backed de
 
 ### AIGeneratorPanel Component
 
-**Location**: `frontend/components/procedures/AIGeneratorPanel.tsx`
+**Location**: `curatore-frontend/components/procedures/AIGeneratorPanel.tsx` (in [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) repo)
 
 The AI Generator panel is shared between org-scoped and system procedure editors. It accepts an optional `generateStream` prop to override the default API call:
 

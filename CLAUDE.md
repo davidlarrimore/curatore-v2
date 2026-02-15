@@ -24,7 +24,7 @@ Curatore v2 is a document processing and curation platform that converts documen
 
 ### Tech Stack
 - **Backend**: FastAPI (Python 3.12+), Celery workers, SQLAlchemy
-- **Frontend**: Next.js 15.5, TypeScript, React 19, Tailwind CSS
+- **Frontend**: [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) (separate repo) — Next.js 15.5, TypeScript, React 19, Tailwind CSS
 - **Services**: Redis, MinIO/S3, Playwright, Document Service
 - **Database**: PostgreSQL 16 with pgvector (required)
 
@@ -90,8 +90,11 @@ See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 ## Quick Start
 
 ```bash
-# Start all services
+# Start backend services
 ./scripts/dev-up.sh
+
+# Start frontend (separate repo)
+cd ../curatore-frontend && docker compose up -d
 
 # Initialize storage buckets
 ./scripts/init_storage.sh
@@ -106,7 +109,7 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 ### URLs
 | Service | URL |
 |---------|-----|
-| Frontend | http://localhost:3000 |
+| Frontend (separate repo) | http://localhost:3000 |
 | Backend API | http://localhost:8000 |
 | API Docs | http://localhost:8000/docs |
 | MCP Gateway (external service) | http://localhost:8020 |
@@ -116,7 +119,7 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 ### Port Mappings
 | Port | Service |
 |------|---------|
-| 3000 | Frontend |
+| 3000 | Frontend (separate repo: curatore-frontend) |
 | 5432 | PostgreSQL (with pgvector) |
 | 8000 | Backend API |
 | 8010 | Document Service |
@@ -134,8 +137,8 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 # Backend tests (use venv)
 backend/.venv/bin/python -m pytest backend/tests -v
 
-# Frontend dev
-cd frontend && npm run dev
+# Frontend dev (separate repo)
+cd ../curatore-frontend && npm run dev
 
 # Worker logs
 ./scripts/tail_worker.sh
@@ -221,24 +224,9 @@ backend/
 │
 ├── alembic/                         # Database migrations
 
-frontend/
-├── app/                             # Next.js App Router pages
-│   ├── admin/                       # Functions, procedures, pipelines, queue, metadata
-│   │   └── metadata/                # Metadata governance UI
-│   ├── settings-admin/              # Admin settings (org, infra, users, metrics)
-│   ├── sam/                         # SAM.gov interface
-│   ├── salesforce/                  # Salesforce CRM (accounts, contacts, opportunities)
-│   ├── forecasts/                   # Acquisition forecasts
-│   ├── sharepoint-sync/             # SharePoint sync
-│   └── scrape/                      # Web scraping
-├── components/                      # React components
-│   ├── procedures/                  # Procedure editor components
-│   │   └── AIGeneratorPanel.tsx     # AI procedure generator panel
-│   └── admin/                       # Admin dashboard components
-└── lib/
-    ├── api.ts                       # API client (all namespaces + contractsApi)
-    ├── unified-jobs-context.tsx      # WebSocket-based job tracking
-    └── job-type-config.ts            # Job type configuration
+# Frontend: Extracted to curatore-frontend (separate repo)
+# Start it with: cd ../curatore-frontend && docker compose up -d
+# See: https://github.com/Amivero-LLC/curatore-frontend
 
 playwright-service/                  # Browser rendering microservice
 
@@ -446,8 +434,8 @@ Functions expose formal **tool contracts** — JSON Schema-based definitions wit
 - `backend/app/api/v1/cwr/schemas.py` — `FunctionSchema` includes governance fields; `ToolContractResponse` for contract API
 - `backend/app/cwr/procedures/compiler/ai_generator.py` — Resolves org's enabled data sources and passes to contract pack; system prompt via `context_builder.py`
 - `backend/app/core/metadata/registry_service.py` — `get_enabled_data_sources()` returns active source types for an org
-- `frontend/lib/api.ts` — `contractsApi` client + `ToolContract` TypeScript interface; `FunctionMeta` with `input_schema`/`output_schema`
-- `frontend/components/procedures/AIGeneratorPanel.tsx` — AI procedure generator panel; accepts optional `generateStream` prop to override the API call (system pages pass `systemCwrApi.generateProcedureStream` for system org context)
+- `curatore-frontend/lib/api.ts` — `contractsApi` client + `ToolContract` TypeScript interface; `FunctionMeta` with `input_schema`/`output_schema` (see [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend))
+- `curatore-frontend/components/procedures/AIGeneratorPanel.tsx` — AI procedure generator panel; accepts optional `generateStream` prop to override the API call (system pages pass `systemCwrApi.generateProcedureStream` for system org context)
 
 ### Governance in the Procedure Generator
 The AI generator enforces governance at two levels:
@@ -615,7 +603,7 @@ curatore-temp/{org_id}/                  # Temporary files
 2. Add Pydantic models to the namespace's `schemas.py`
 3. Implement service in the appropriate `backend/app/core/` subdirectory
 4. Register router in the namespace's `__init__.py`
-5. Update `frontend/lib/api.ts` (add TypeScript interfaces + API methods)
+5. Update frontend API client in [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) `lib/api.ts` (add TypeScript interfaces + API methods)
 
 ### New Service
 1. Identify the correct location:
@@ -659,65 +647,13 @@ See [Data Connections Guide](docs/DATA_CONNECTIONS.md)
 
 ---
 
-## Frontend Patterns
+## Frontend
 
-### Design System
-- **Colors**: Indigo/purple primary, emerald success, red error, amber warning
-- **Icons**: Lucide React (`lucide-react`)
-- **Dark Mode**: All components use `dark:` prefix
+The frontend has been extracted to its own repository: [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend).
 
-### Real-Time Job Tracking
-WebSocket-based with automatic polling fallback:
+Start it with: `cd ../curatore-frontend && docker compose up -d`
 
-```tsx
-import { useActiveJobs } from '@/lib/context-shims'
-
-function MyPage() {
-  const { addJob, getJobsForResource, isResourceBusy } = useActiveJobs()
-
-  const handleStart = async () => {
-    const result = await api.startJob(resourceId)
-    addJob({
-      runId: result.run_id,
-      jobType: 'sharepoint_sync',
-      displayName: 'My Sync',
-      resourceId: resourceId,
-      resourceType: 'sharepoint_config',
-    })
-  }
-}
-```
-
-**Key Files:**
-- `frontend/lib/unified-jobs-context.tsx` - Job tracking
-- `frontend/lib/context-shims.ts` - Backward-compatible hooks
-- `frontend/components/ui/RunningJobBanner.tsx` - Job status banner
-
-### API Client (`frontend/lib/api.ts`)
-
-The API client is organized into namespace-specific exports:
-
-| Export | Namespace | Key Methods |
-|--------|-----------|-------------|
-| `systemApi` | Admin | `getHealth`, `getLLMStatus`, `getExtractionEngines` |
-| `authApi` | Admin | `login`, `register`, `resetPassword` |
-| `usersApi` | Admin | `listUsers`, `updateUser` |
-| `assetsApi` | Data | `listAssets`, `getAsset`, `deleteAsset` |
-| `searchApi` | Data | `search`, `getMetadataSchema` |
-| `collectionsApi` | Data | `listCollections`, `getCollection`, `createCollection`, `deleteCollection`, `listVectorSyncs`, `addVectorSync` |
-| `metadataApi` | Data | `getCatalog`, `getNamespaces`, `getFacets` |
-| `samApi` | Data | `getSearches`, `getSolicitations`, `getNotices` |
-| `salesforceApi` | Data | `getAccounts`, `getContacts`, `getOpportunities` |
-| `forecastsApi` | Data | `getSyncs`, `getForecasts` |
-| `sharepointSyncApi` | Data | `getConfigs`, `createConfig` |
-| `scrapeApi` | Data | `getCollections` |
-| `objectStorageApi` | Data | `browse`, `upload`, `download` |
-| `runsApi` | Ops | `listRuns`, `getRunLogs` |
-| `metricsApi` | Ops | `getProcedureMetrics` |
-| `functionsApi` | CWR | `listFunctions`, `executeFunction` |
-| `contractsApi` | CWR | `listContracts`, `getContract`, `getInputSchema`, `getOutputSchema` |
-| `proceduresApi` | CWR | `listProcedures`, `createProcedure`, `runProcedure`, `generateProcedure` |
-| `pipelinesApi` | CWR | `listPipelines`, `runPipeline` |
+See the curatore-frontend repo's `CLAUDE.md` for frontend patterns, API client architecture, and component details.
 
 ---
 
@@ -783,6 +719,7 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 
 | Document | Description |
 |----------|-------------|
+| [Frontend](https://github.com/Amivero-LLC/curatore-frontend) | Next.js frontend (separate repo) |
 | [MCP Gateway](https://github.com/davidlarrimore/curatore-mcp-service) | AI tool server for Claude Desktop, Open WebUI, and MCP clients (external service) |
 | [MCP & Open WebUI](docs/MCP_OPEN_WEBUI.md) | Open WebUI integration guide |
 | [Search & Indexing](docs/SEARCH_INDEXING.md) | Hybrid search, pgvector, chunking, embeddings, reindexing |

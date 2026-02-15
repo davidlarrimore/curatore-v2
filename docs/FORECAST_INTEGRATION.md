@@ -593,7 +593,7 @@ async def handle_forecast_scheduled_sync(session, run, config):
 | `backend/app/connectors/state_forecast/state_pull_service.py` | State scraping + Excel parsing |
 | `backend/app/api/v1/data/routers/forecasts.py` | REST API endpoints |
 | `backend/app/core/tasks/forecasts.py` | `forecast_sync_task` Celery task |
-| `frontend/app/forecasts/` | Frontend pages |
+| `curatore-frontend/app/forecasts/` | Frontend pages (in [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) repo) |
 
 ---
 

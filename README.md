@@ -73,8 +73,11 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 ### Start All Services
 
 ```bash
-# Start all services (backend, worker, frontend, redis, extraction, minio, postgres)
+# Start backend services (backend, worker, redis, minio, postgres)
 ./scripts/dev-up.sh
+
+# Start frontend (separate repo)
+cd ../curatore-frontend && docker compose up -d
 
 # Or using Make
 make up
@@ -111,7 +114,7 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
 - **Alembic**: Database migrations
 - **Pydantic**: Data validation and settings management
 
-### Frontend
+### Frontend ([curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) — separate repo)
 - **Next.js 15**: React framework with App Router
 - **TypeScript**: Type-safe frontend development
 - **Tailwind CSS**: Utility-first styling with dark mode
@@ -190,19 +193,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### Frontend Development
 
+The frontend is in a separate repo: [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend)
+
 ```bash
-# Install dependencies
-cd frontend
+cd ../curatore-frontend
 npm install
-
-# Start dev server
 npm run dev
-
-# Type checking
-npm run type-check
-
-# Linting
-npm run lint
 ```
 
 ### Worker Development
@@ -416,7 +412,7 @@ curl -X POST http://localhost:8000/api/v1/search/reindex \
 
 | Port | Service |
 |------|---------|
-| 3000 | Frontend (Next.js) |
+| 3000 | Frontend (separate repo: curatore-frontend) |
 | 5432 | PostgreSQL + pgvector |
 | 8000 | Backend API (FastAPI) |
 | 8010 | Extraction Service |

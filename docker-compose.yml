@@ -222,27 +222,9 @@ services:
       - curatore-network
 
   # --------------------------------------------------------------------------
-  # FRONTEND: Next.js app
+  # FRONTEND: Replaced by curatore-frontend (separate Docker Compose)
+  # Start it with: cd ../curatore-frontend && docker compose up -d
   # --------------------------------------------------------------------------
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: curatore-frontend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-      - NEXT_PUBLIC_EXTRACTION_URL=${NEXT_PUBLIC_EXTRACTION_URL:-http://localhost:8010}
-      - NEXT_PUBLIC_REDIS_URL=${NEXT_PUBLIC_REDIS_URL:-http://localhost:6379}
-    command: npm run dev:stable
-    ports:
-      - "3000:3000"
-    networks:
-      - curatore-network
-    depends_on:
-      - backend
 
   # --------------------------------------------------------------------------
   # EXTRACTION: Replaced by curatore-document-service (separate Docker Compose)

@@ -15,7 +15,7 @@ These are the most commonly missed steps that cause integrations to fail:
 | **3. Use explicit task name** | `@celery_app.task(name="app.tasks.xxx")` | Task routing fails silently |
 | **4. Use run_log_service for logging** | Import `run_log_service`, NOT `run_service` | `AttributeError: 'RunService' object has no attribute 'log_event'` |
 | **5. Recreate worker after adding queue** | `docker-compose stop worker && docker-compose rm -f worker && docker-compose up -d worker` | Worker doesn't consume new queue |
-| **6. Add job type config** | `frontend/lib/job-type-config.ts` | Jobs show as "Unknown" type |
+| **6. Add job type config** | `curatore-frontend/lib/job-type-config.ts` | Jobs show as "Unknown" type |
 
 **After making changes, always verify with:**
 ```bash
@@ -151,19 +151,19 @@ Use this checklist when implementing a new data connection:
 - [ ] MetadataBuilder subclass in `backend/app/core/search/metadata_builders.py`
 - [ ] Builder registration in `metadata_builders.py` `_register_defaults()`
 
-### Frontend - Core
-- [ ] TypeScript interfaces in `frontend/lib/api.ts`
-- [ ] API client methods in `frontend/lib/api.ts`
-- [ ] Job type config in `frontend/lib/job-type-config.ts`
-- [ ] Dashboard page at `frontend/app/{name}/page.tsx`
-- [ ] List pages at `frontend/app/{name}/{entity}/page.tsx`
-- [ ] Detail pages at `frontend/app/{name}/{entity}/[id]/page.tsx`
-- [ ] Sidebar navigation in `frontend/components/layout/LeftSidebar.tsx`
-- [ ] Job Manager support in `frontend/app/admin/queue/page.tsx`
-- [ ] Job detail support in `frontend/app/admin/queue/[runId]/page.tsx`
+### Frontend - Core (in [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) repo)
+- [ ] TypeScript interfaces in `lib/api.ts`
+- [ ] API client methods in `lib/api.ts`
+- [ ] Job type config in `lib/job-type-config.ts`
+- [ ] Dashboard page at `app/{name}/page.tsx`
+- [ ] List pages at `app/{name}/{entity}/page.tsx`
+- [ ] Detail pages at `app/{name}/{entity}/[id]/page.tsx`
+- [ ] Sidebar navigation in `components/layout/LeftSidebar.tsx`
+- [ ] Job Manager support in `app/admin/queue/page.tsx`
+- [ ] Job detail support in `app/admin/queue/[runId]/page.tsx`
 
-### Frontend - Search
-- [ ] Source type in `sourceTypeConfig` in `frontend/app/search/page.tsx` (name, icon, color)
+### Frontend - Search (in [curatore-frontend](https://github.com/Amivero-LLC/curatore-frontend) repo)
+- [ ] Source type in `sourceTypeConfig` in `app/search/page.tsx` (name, icon, color)
 - [ ] Import Lucide icon for your source type
 - [ ] Update search page help text to mention new source
 - [ ] Search result card component (if custom display needed)
@@ -957,7 +957,7 @@ ALL_RUN_TYPES = [
 
 ### Frontend: Job Type Config
 
-**Location**: `frontend/lib/job-type-config.ts`
+**Location**: `curatore-frontend/lib/job-type-config.ts`
 
 1. **Add to JobType union**:
 ```typescript
@@ -998,7 +998,7 @@ if (runType.startsWith('salesforce_')) return 'salesforce_import'
 
 ### Frontend: Job Manager Page
 
-**Location**: `frontend/app/admin/queue/page.tsx`
+**Location**: `curatore-frontend/app/admin/queue/page.tsx`
 
 1. **Add icon import**:
 ```typescript
@@ -1033,7 +1033,7 @@ function getJobTypeColor(runType: string): string {
 
 ### Frontend: Job Detail Page
 
-**Location**: `frontend/app/admin/queue/[runId]/page.tsx`
+**Location**: `curatore-frontend/app/admin/queue/[runId]/page.tsx`
 
 1. **Add icon import**:
 ```typescript
@@ -1053,7 +1053,7 @@ const JOB_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; 
 ## 8. Frontend API Client
 
 ### Location
-`frontend/lib/api.ts`
+`curatore-frontend/lib/api.ts`
 
 ### Guidelines
 
@@ -1174,7 +1174,7 @@ export default {
 
 ### Dashboard Page
 
-**Location**: `frontend/app/{name}/page.tsx`
+**Location**: `curatore-frontend/app/{name}/page.tsx`
 
 Key elements:
 - Stats cards with links to list pages
@@ -1238,7 +1238,7 @@ function DashboardContent() {
 
 ### List Page
 
-**Location**: `frontend/app/{name}/{entity}/page.tsx`
+**Location**: `curatore-frontend/app/{name}/{entity}/page.tsx`
 
 Key elements:
 - Search/filter controls
@@ -1247,7 +1247,7 @@ Key elements:
 
 ### Detail Page
 
-**Location**: `frontend/app/{name}/{entity}/[id]/page.tsx`
+**Location**: `curatore-frontend/app/{name}/{entity}/[id]/page.tsx`
 
 Key elements:
 - Breadcrumb navigation
@@ -1260,7 +1260,7 @@ Key elements:
 ## 10. Sidebar Navigation
 
 ### Location
-`frontend/components/layout/LeftSidebar.tsx`
+`curatore-frontend/components/layout/LeftSidebar.tsx`
 
 1. **Add icon import**:
 ```typescript
@@ -1399,7 +1399,7 @@ grep -r "your_run_type" backend/app/api/v1/routers/queue_admin.py
 # Expected: Shows your run type in ALL_RUN_TYPES list
 
 # 4. Check job type config exists
-grep -r "your_job_type" frontend/lib/job-type-config.ts
+grep -r "your_job_type" ../curatore-frontend/lib/job-type-config.ts
 # Expected: Shows your job type configuration
 ```
 
@@ -1539,7 +1539,7 @@ ALL_RUN_TYPES = [
 
 **Cause**: Missing job type configuration in frontend.
 
-**Solution**: Add to `frontend/lib/job-type-config.ts`:
+**Solution**: Add to `curatore-frontend/lib/job-type-config.ts`:
 ```typescript
 export const JOB_TYPE_CONFIG = {
   // ... existing configs ...
@@ -2779,7 +2779,7 @@ async def search_my_data_get(
 
 ### Step 5: Update Frontend Search Page
 
-**Location**: `frontend/app/search/page.tsx`
+**Location**: `curatore-frontend/app/search/page.tsx`
 
 Add your source type to the filter configuration:
 

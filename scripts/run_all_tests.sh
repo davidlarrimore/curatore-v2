@@ -4,10 +4,11 @@
 # Run tests for all services sequentially and log results.
 # - Creates a timestamped report directory under logs/test_reports
 # - Pre-flight: verify app is not already running (ports 8000/3000)
-# - Runs linting (Ruff for Python, ESLint for frontend)
-# - Runs dependency vulnerability scanning (pip-audit, npm audit)
-# - Sets up per-service test environments (Python venvs, Node deps) as needed
-# - Runs backend pytest, mcp pytest, and frontend npm test
+# - Runs linting (Ruff for Python)
+# - Runs dependency vulnerability scanning (pip-audit)
+# - Sets up per-service test environments (Python venvs) as needed
+# - Runs backend pytest and mcp pytest
+# Note: Frontend tests are in curatore-frontend repo
 # - Summarizes PASS/WARN/FAIL per service and exits nonzero on failures
 #
 # Env overrides:
@@ -79,7 +80,7 @@ port_in_use() {
 }
 
 preflight_check_ports() {
-  local -a ports=(8000 3000)
+  local -a ports=(8000)
   local used=()
   for p in "${ports[@]}"; do
     if port_in_use "$p"; then
@@ -241,37 +242,7 @@ run_python_lint() {
   fi
 }
 
-run_frontend_lint() {
-  if [[ "$SKIP_LINT" = "1" ]]; then
-    log_note "[SKIP] Frontend lint (SKIP_LINT=1)"
-    return 0
-  fi
-
-  print_header "Frontend Lint (ESLint)"
-  local svc_dir="$ROOT_DIR/frontend"
-  local log="$REPORT_DIR/frontend_lint.log"
-
-  if [[ ! -d "$svc_dir" ]]; then
-    log_note "[WARN] frontend-lint: frontend directory not found"
-    return 0
-  fi
-
-  if ! command -v npm >/dev/null 2>&1; then
-    log_note "[WARN] frontend-lint: npm not installed, skipping"
-    return 0
-  fi
-
-  log_note "Running ESLint on frontend/ …"
-  local code=0
-  npm --prefix "$svc_dir" run lint >"$log" 2>&1 || code=$?
-
-  if [[ $code -eq 0 ]]; then
-    log_note "[CLEAN] No frontend lint issues found"
-  else
-    log_note "[INFO] ESLint found issues — see frontend_lint.log (report-only, not failing)"
-    tail -n 20 "$log" | tee -a "$SUMMARY_FILE"
-  fi
-}
+# Frontend lint removed — frontend extracted to curatore-frontend repo
 
 # -------- Dependency Scanning --------
 run_dependency_scan() {
@@ -313,20 +284,8 @@ run_dependency_scan() {
     log_note "[WARN] dep-scan: backend venv not found, skipping Python scan"
   fi
 
-  # Node.js: npm audit
-  local npm_log="$REPORT_DIR/npm_audit.log"
-  if command -v npm >/dev/null 2>&1 && [[ -d "$ROOT_DIR/frontend" ]]; then
-    log_note "Scanning Node.js dependencies (npm audit) …"
-    npm audit --prefix "$ROOT_DIR/frontend" >"$npm_log" 2>&1 || true
-    if grep -q "found 0 vulnerabilities" "$npm_log" 2>/dev/null; then
-      log_note "[CLEAN] No Node.js dependency vulnerabilities found"
-    else
-      log_note "[INFO] npm audit found issues — see npm_audit.log (report-only)"
-      tail -n 10 "$npm_log" | tee -a "$SUMMARY_FILE"
-    fi
-  else
-    log_note "[WARN] dep-scan: npm or frontend directory not found, skipping Node.js scan"
-  fi
+  # Node.js: npm audit — frontend extracted to curatore-frontend repo
+  log_note "[SKIP] Node.js dep scan — frontend extracted to curatore-frontend repo"
 }
 
 # -------- Test Runners --------
@@ -411,85 +370,7 @@ run_mcp_tests() {
   fi
 }
 
-run_frontend_tests() {
-  local svc="frontend"
-  local svc_dir="$ROOT_DIR/frontend"
-  local subdir="$REPORT_DIR/$svc"
-  mkdir -p "$subdir"
-  local log="$subdir/${svc}.log"
-
-  if [[ ! -d "$svc_dir" ]]; then
-    echo "[WARN] $svc: directory not found" | tee -a "$SUMMARY_FILE"
-    record_result "$svc" "WARN" "directory not found"
-    return 0
-  fi
-
-  if [[ ! -f "$svc_dir/package.json" ]]; then
-    echo "[WARN] $svc: package.json not found" | tee -a "$SUMMARY_FILE"
-    record_result "$svc" "WARN" "no package.json"
-    return 0
-  fi
-
-  # Detect package manager
-  local runner cmd
-  if [[ -f "$svc_dir/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
-    runner="pnpm"
-    if [[ "$SKIP_COVERAGE" != "1" ]]; then
-      cmd=(pnpm -C "$svc_dir" -s test -- --coverage)
-    else
-      cmd=(pnpm -C "$svc_dir" -s test)
-    fi
-  elif [[ -f "$svc_dir/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
-    runner="yarn"
-    if [[ "$SKIP_COVERAGE" != "1" ]]; then
-      cmd=(yarn --cwd "$svc_dir" test -s -- --coverage)
-    else
-      cmd=(yarn --cwd "$svc_dir" test -s)
-    fi
-  else
-    runner="npm"
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "[WARN] $svc: npm not installed" | tee -a "$SUMMARY_FILE"
-      record_result "$svc" "WARN" "npm missing"
-      return 0
-    fi
-    if [[ "$SKIP_COVERAGE" != "1" ]]; then
-      cmd=(npm --prefix "$svc_dir" run -s test --if-present -- --coverage)
-    else
-      cmd=(npm --prefix "$svc_dir" run -s test --if-present)
-    fi
-  fi
-
-  # Check if a test script exists without requiring jq
-  if ! grep -q '"test"\s*:' "$svc_dir/package.json"; then
-    echo "[WARN] $svc: no test script defined" | tee -a "$SUMMARY_FILE"
-    record_result "$svc" "WARN" "no test script"
-    return 0
-  fi
-
-  # Ensure node modules installed (best-effort)
-  if [[ ! -d "$svc_dir/node_modules" ]]; then
-    echo "Installing $svc dependencies (node) …"
-    if [[ "$runner" = "pnpm" ]]; then
-      pnpm -C "$svc_dir" -s install >"$REPORT_DIR/${svc}_setup.log" 2>&1 || echo "[WARN] $svc: pnpm install failed" | tee -a "$SUMMARY_FILE"
-    elif [[ "$runner" = "yarn" ]]; then
-      yarn --cwd "$svc_dir" install --silent >"$REPORT_DIR/${svc}_setup.log" 2>&1 || echo "[WARN] $svc: yarn install failed" | tee -a "$SUMMARY_FILE"
-    else
-      npm --prefix "$svc_dir" ci --silent >"$REPORT_DIR/${svc}_setup.log" 2>&1 || npm --prefix "$svc_dir" install --silent >"$REPORT_DIR/${svc}_setup.log" 2>&1 || echo "[WARN] $svc: npm install failed" | tee -a "$SUMMARY_FILE"
-    fi
-  fi
-
-  echo "Running $svc tests ($runner test) …" | tee -a "$SUMMARY_FILE"
-  "${cmd[@]}" >"$log" 2>&1
-  local code=$?
-  if [[ $code -eq 0 ]]; then
-    echo "[PASS] $svc" | tee -a "$SUMMARY_FILE"
-    record_result "$svc" "PASS"
-  else
-    echo "[FAIL] $svc (exit $code) — see $(basename "$log")" | tee -a "$SUMMARY_FILE"
-    record_result "$svc" "FAIL" "exit $code"
-  fi
-}
+# Frontend tests removed — frontend extracted to curatore-frontend repo
 
 RESULTS=()
 print_header "Curatore v2: Test Run ($TIMESTAMP)"
@@ -499,7 +380,6 @@ echo "Skip lint: ${SKIP_LINT}, Skip coverage: ${SKIP_COVERAGE}, Skip dep scan: $
 
 # Lint first (fast feedback)
 run_python_lint
-run_frontend_lint
 
 # Dependency scanning
 run_dependency_scan
@@ -507,7 +387,6 @@ run_dependency_scan
 # Then tests
 run_backend_tests
 run_mcp_tests
-run_frontend_tests
 
 echo "" | tee -a "$SUMMARY_FILE"
 print_header "Summary"

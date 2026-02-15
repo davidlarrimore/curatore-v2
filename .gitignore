@@ -14,12 +14,9 @@ config.yml
 .venv/
 **/.venv/
 
-# Node
-node_modules/
-.next/
+# Node (frontend extracted to curatore-frontend repo)
+# These entries kept for any remaining JS tooling
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # OS
 .DS_Store
