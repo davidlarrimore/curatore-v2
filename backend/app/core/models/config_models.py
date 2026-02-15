@@ -753,6 +753,30 @@ class MinIOConfig(BaseModel):
     )
 
 
+class MCPConfig(BaseModel):
+    """
+    MCP Gateway service configuration.
+
+    AI tool server that exposes CWR functions to Claude Desktop, Open WebUI,
+    and other MCP/OpenAI-compatible clients.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable MCP Gateway service"
+    )
+    service_url: str = Field(
+        description="MCP Gateway service URL (e.g., http://mcp:8020)"
+    )
+    timeout: int = Field(
+        default=30,
+        ge=1,
+        le=600,
+        description="Request timeout in seconds"
+    )
+
+
 class AppConfig(BaseModel):
     """
     Root application configuration.
@@ -784,6 +808,10 @@ class AppConfig(BaseModel):
     playwright: Optional[PlaywrightConfig] = Field(
         default=None,
         description="Playwright rendering service configuration"
+    )
+    mcp: Optional[MCPConfig] = Field(
+        default=None,
+        description="MCP Gateway service configuration"
     )
     microsoft_graph: Optional[MicrosoftGraphConfig] = Field(
         default=None,

@@ -58,8 +58,11 @@ MCP_BACKEND_API_KEY=cur_abcdef1234567890
 
 ### Step 3: Start the MCP Gateway
 
+The MCP Gateway runs as a separate service (`curatore-mcp-service`):
+
 ```bash
-docker-compose up -d mcp
+cd ../curatore-mcp-service
+docker compose up -d
 ```
 
 Verify it's running:
@@ -233,7 +236,7 @@ curl -X POST http://localhost:8020/search_assets \
 
 ## Available Tools
 
-Both connection methods expose the same tools, auto-derived from backend contracts with `exposure_profile.agent: true` (see `mcp/policy.yaml` for denylist overrides):
+Both connection methods expose the same tools, auto-derived from backend contracts with `exposure_profile.agent: true` (see the MCP service's `policy.yaml` for denylist overrides):
 
 ### Search Functions
 
@@ -306,7 +309,7 @@ AI: [calls confirm_email with token]
 
 ## Policy Configuration
 
-The MCP Gateway enforces policies defined in `mcp/policy.yaml`:
+The MCP Gateway enforces policies defined in its `policy.yaml`:
 
 ### Auto-Derive Mode (v2.0)
 
@@ -387,7 +390,7 @@ curl -X POST http://localhost:8020/mcp \
 
 ### Dev Mode
 
-If `MCP_SERVICE_API_KEY` is empty (or not set), the gateway runs in **dev mode** — all requests pass through without authentication. This is useful for local development but should never be used in production.
+If `SERVICE_API_KEY` is empty (or not set), the gateway runs in **dev mode** -- all requests pass through without authentication. This is useful for local development but should never be used in production.
 
 ---
 
@@ -431,13 +434,13 @@ Open WebUI
 
 ## Claude Desktop Integration
 
-Claude Desktop connects via **MCP Streamable HTTP transport** (same as Open WebUI's MCP method). See the [MCP Gateway README](../mcp/README.md#claude-desktop) for configuration.
+Claude Desktop connects via **MCP Streamable HTTP transport** (same as Open WebUI's MCP method). See the [MCP Gateway README](https://github.com/davidlarrimore/curatore-mcp-service#claude-desktop) for configuration.
 
 ---
 
 ## Related Documentation
 
-- [MCP Gateway README](../mcp/README.md) - Full gateway documentation
+- [MCP Gateway README](https://github.com/davidlarrimore/curatore-mcp-service) - Full gateway documentation (external repo)
 - [Auth & Access Model](AUTH_ACCESS_MODEL.md) - Roles, org context, delegated auth
 - [CWR Functions & Procedures](FUNCTIONS_PROCEDURES.md) - Function reference
 - [Search & Indexing](SEARCH_INDEXING.md) - Search capabilities

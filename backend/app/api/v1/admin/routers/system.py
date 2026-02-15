@@ -29,6 +29,9 @@ def get_redis_client():
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
+# Public router — no auth required (lightweight, zero-I/O endpoints only)
+public_router = APIRouter()
+
 
 # ============================================================================
 # HEALTH CHECK HELPERS (shared by individual and comprehensive endpoints)
@@ -291,6 +294,59 @@ async def _check_playwright() -> Dict[str, Any]:
         }
 
 
+async def _check_mcp() -> Dict[str, Any]:
+    """Check MCP Gateway service health."""
+    from app.core.shared.config_loader import config_loader
+
+    mcp_cfg = config_loader.get_mcp_config()
+    if not mcp_cfg or not mcp_cfg.enabled:
+        return {
+            "status": "not_configured",
+            "message": "MCP Gateway not configured",
+            "configured": False,
+        }
+
+    mcp_url = mcp_cfg.service_url.rstrip("/")
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.get(f"{mcp_url}/health")
+                if resp.status_code == 200:
+                    health_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                    return {
+                        "status": "healthy",
+                        "message": "MCP Gateway is responding",
+                        "url": mcp_url,
+                        "configured": True,
+                        "version": health_data.get("version"),
+                        "service": health_data.get("service"),
+                    }
+                else:
+                    return {
+                        "status": "degraded",
+                        "message": f"MCP Gateway returned status {resp.status_code}",
+                        "url": mcp_url,
+                        "configured": True,
+                    }
+            except httpx.HTTPStatusError:
+                return {
+                    "status": "unknown",
+                    "message": "MCP Gateway configured but health endpoint not available",
+                    "url": mcp_url,
+                    "configured": True,
+                }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"MCP Gateway error: {str(e)}",
+            "url": mcp_url,
+            "configured": True,
+        }
+
+
 async def _check_sharepoint() -> Dict[str, Any]:
     """Check SharePoint / Microsoft Graph API connectivity."""
     import httpx
@@ -391,9 +447,9 @@ async def _check_sharepoint() -> Dict[str, Any]:
 # INDIVIDUAL HEALTH ENDPOINTS (backward compatibility)
 # ============================================================================
 
-@router.get("/system/health/backend", tags=["System"])
+@public_router.get("/system/health/backend", tags=["System"])
 async def health_check_backend() -> Dict[str, Any]:
-    """Health check for backend API component."""
+    """Health check for backend API component (public, no auth required)."""
     return await _check_backend()
 
 
@@ -439,6 +495,12 @@ async def health_check_playwright() -> Dict[str, Any]:
     return await _check_playwright()
 
 
+@router.get("/system/health/mcp", tags=["System"])
+async def health_check_mcp() -> Dict[str, Any]:
+    """Health check for MCP Gateway service component."""
+    return await _check_mcp()
+
+
 @router.get("/system/health/sharepoint", tags=["System"])
 async def health_check_sharepoint() -> Dict[str, Any]:
     """Health check for SharePoint / Microsoft Graph API connectivity."""
@@ -462,6 +524,7 @@ async def comprehensive_health() -> Dict[str, Any]:
         _check_storage(),
         _check_llm(),
         _check_playwright(),
+        _check_mcp(),
         _check_sharepoint(),
         return_exceptions=True,
     )
@@ -469,7 +532,7 @@ async def comprehensive_health() -> Dict[str, Any]:
     component_keys = [
         "backend", "database", "redis", "celery_worker",
         "document_service", "object_storage",
-        "llm", "playwright", "sharepoint",
+        "llm", "playwright", "mcp_gateway", "sharepoint",
     ]
 
     health_report: Dict[str, Any] = {

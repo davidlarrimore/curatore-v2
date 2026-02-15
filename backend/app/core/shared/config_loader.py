@@ -26,6 +26,7 @@ from app.core.models.config_models import (
     EmailConfig,
     ExtractionConfig,
     LLMConfig,
+    MCPConfig,
     MicrosoftGraphConfig,
     MinIOConfig,
     PlaywrightConfig,
@@ -201,6 +202,9 @@ class ConfigLoader:
             if config.playwright is None:
                 logger.warning("Playwright configuration not found (optional)")
 
+            if config.mcp is None:
+                logger.warning("MCP Gateway configuration not found (optional)")
+
             if config.microsoft_graph is None:
                 logger.warning("Microsoft Graph configuration not found (optional)")
 
@@ -293,6 +297,19 @@ class ConfigLoader:
             PlaywrightConfig instance or None if not configured
         """
         return self.get_config().playwright
+
+    def get_mcp_config(self) -> Optional[MCPConfig]:
+        """
+        Get typed MCP Gateway configuration.
+
+        Returns:
+            MCPConfig instance or None if not configured
+        """
+        return self.get_config().mcp
+
+    def has_mcp_config(self) -> bool:
+        """Check if MCP Gateway configuration is available."""
+        return self.get_mcp_config() is not None
 
     def has_llm_config(self) -> bool:
         """Check if LLM configuration is available."""

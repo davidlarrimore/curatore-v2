@@ -526,7 +526,8 @@ class FacetReferenceService:
         index = await self._get_reverse_index(session, org_id, facet_name)
         known_lower = set(index.keys()) if index else set()
 
-        # Build a single UNION ALL query across all mappings
+        # Build a single UNION ALL query across all mappings, tagging each
+        # row with the content_type so we can report data source provenance.
         org_clause = "AND organization_id = CAST(:org_id AS UUID)" if org_id else ""
         union_parts = []
         for content_type, json_path in mappings.items():
@@ -534,8 +535,11 @@ class FacetReferenceService:
             if len(parts) != 2:
                 continue
             ns, field = parts
+            # Escape single quotes in content_type to prevent SQL injection
+            safe_ct = content_type.replace("'", "''")
             union_parts.append(
-                f"SELECT metadata->'{ns}'->>'{field}' AS val "
+                f"SELECT metadata->'{ns}'->>'{field}' AS val, "
+                f"'{safe_ct}' AS content_type "
                 f"FROM search_chunks "
                 f"WHERE metadata->'{ns}'->>'{field}' IS NOT NULL {org_clause}"
             )
@@ -544,7 +548,9 @@ class FacetReferenceService:
             return []
 
         combined_sql = text(f"""
-            SELECT val, COUNT(*) AS cnt
+            SELECT val,
+                   COUNT(*) AS cnt,
+                   ARRAY_AGG(DISTINCT content_type) AS sources
             FROM ({' UNION ALL '.join(union_parts)}) sub
             GROUP BY val
             ORDER BY cnt DESC
@@ -560,8 +566,13 @@ class FacetReferenceService:
         for row in result:
             val = row[0]
             cnt = row[1]
+            sources = row[2] if len(row) > 2 else []
             if val and val.lower() not in known_lower:
-                unmapped.append({"value": val, "count": cnt})
+                unmapped.append({
+                    "value": val,
+                    "count": cnt,
+                    "sources": list(sources) if sources else [],
+                })
 
         return unmapped
 

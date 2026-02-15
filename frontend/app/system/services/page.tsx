@@ -19,6 +19,7 @@ import {
   Radio,
   Share2,
   HardDrive,
+  Plug,
 } from 'lucide-react'
 import { servicesApi, Service } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
@@ -32,6 +33,7 @@ const serviceIcons: Record<string, React.ComponentType<{ className?: string }>> 
   queue: Radio,
   database: Database,
   microsoft_graph: Share2,
+  mcp_gateway: Plug,
   default: Server,
 }
 

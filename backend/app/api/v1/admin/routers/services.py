@@ -162,6 +162,20 @@ async def sync_services_from_config(session: AsyncSession) -> Dict[str, int]:
             },
         })
 
+    # --- MCP Gateway ---
+    mcp = config_loader.get_mcp_config()
+    if mcp:
+        defs.append({
+            "name": "mcp-gateway",
+            "service_type": "mcp_gateway",
+            "description": "MCP Gateway (AI tool server)",
+            "is_active": mcp.enabled,
+            "config": {
+                "service_url": mcp.service_url,
+                "timeout": mcp.timeout,
+            },
+        })
+
     # --- Object storage (MinIO / S3) ---
     minio = config_loader.get_minio_config()
     if minio:

@@ -256,41 +256,9 @@ services:
   # --------------------------------------------------------------------------
 
   # --------------------------------------------------------------------------
-  # MCP: Model Context Protocol Gateway for Open WebUI integration
+  # MCP: Replaced by curatore-mcp-service (separate Docker Compose)
+  # Start it with: cd ../curatore-mcp-service && docker compose up -d
   # --------------------------------------------------------------------------
-  mcp:
-    build:
-      context: ./mcp
-      dockerfile: Dockerfile
-    container_name: curatore-mcp
-    restart: unless-stopped
-    ports:
-      - "8020:8020"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - BACKEND_URL=http://backend:8000
-      - REDIS_URL=redis://redis:6379/2
-      - SERVICE_API_KEY=${MCP_API_KEY:-}
-      - BACKEND_API_KEY=${MCP_API_KEY:-}
-      - LOG_LEVEL=${MCP_LOG_LEVEL:-INFO}
-      - DEBUG=${DEBUG:-false}
-    volumes:
-      # Hot-reload MCP service code
-      - ./mcp/app:/app/app
-      # Policy configuration (read-only)
-      - ./mcp/policy.yaml:/app/policy.yaml:ro
-    depends_on:
-      - backend
-      - redis
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8020/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    # Run with reload for live dev edits
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8020 --reload
-    networks:
-      - curatore-network
 
   # --------------------------------------------------------------------------
   # POSTGRES: PostgreSQL database with pgvector extension

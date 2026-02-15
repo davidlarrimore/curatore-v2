@@ -194,7 +194,7 @@ export const systemApi = {
   async checkAvailability(): Promise<boolean> {
     try {
       const res = await apiFetch('/admin/system/health/backend', { cache: 'no-store' })
-      return res.ok || res.status === 401 || res.status === 403
+      return res.ok
     } catch {
       return false
     }
@@ -3545,7 +3545,7 @@ export interface FacetAutocompleteResult {
 export interface FacetDiscoverResult {
   facet_name: string
   unmapped_count: number
-  unmapped_values: Array<{ value: string; count: number }>
+  unmapped_values: Array<{ value: string; count: number; sources?: string[] }>
   suggestions: JsonRecord[]
   error?: string
 }
@@ -3980,6 +3980,39 @@ export const systemMetadataApi = {
     const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases/${aliasId}`), {
       method: 'DELETE',
     })
+    return handleJson(res)
+  },
+
+  // -- Reference Data: Discovery & Approval --
+
+  async autocomplete(facetName: string, query: string, limit: number = 10): Promise<FacetAutocompleteResult[]> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/autocomplete?q=${encodeURIComponent(query)}&limit=${limit}`))
+    return handleJson(res)
+  },
+
+  async discoverReferenceValues(facetName: string): Promise<FacetDiscoverResult> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/discover`), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async approveReferenceValue(facetName: string, valueId: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/approve`), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async rejectReferenceValue(facetName: string, valueId: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/reject`), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async getPendingSuggestionCount(): Promise<FacetPendingSuggestions> {
+    const res = await this._fetch(apiUrl('/data/metadata/facets/pending-suggestions'))
     return handleJson(res)
   },
 
