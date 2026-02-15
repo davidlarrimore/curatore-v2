@@ -595,11 +595,32 @@ POST   /api/v1/data/webhooks/pipelines/{slug}  # Trigger pipeline
 
 ## Frontend Pages
 
+### Org-Scoped Pages
+
 | Page | Path | Purpose |
 |------|------|---------|
-| Functions | `/admin/functions` | Browse functions, view parameters, test |
-| Procedures | `/admin/procedures` | Manage procedures, view runs, trigger |
-| Pipelines | `/admin/pipelines` | Manage pipelines, view item states |
+| Functions | `/orgs/[slug]/admin/functions` | Browse functions, view parameters, test |
+| Procedures | `/orgs/[slug]/admin/procedures` | Manage org procedures, view runs, trigger |
+| Pipelines | `/orgs/[slug]/admin/pipelines` | Manage pipelines, view item states |
+
+### System Pages
+
+| Page | Path | Purpose |
+|------|------|---------|
+| System Procedures | `/system/procedures` | List file-based (system) procedures only |
+| Edit System Procedure | `/system/procedures/[slug]/edit` | Edit procedure definition, AI generator, function catalog |
+| New System Procedure | `/system/procedures/new` | Create a new system procedure |
+
+The system procedures list filters to `source_type === "system"` (file-backed definitions). User-created procedures in the system org are excluded from this list.
+
+### AIGeneratorPanel Component
+
+**Location**: `frontend/components/procedures/AIGeneratorPanel.tsx`
+
+The AI Generator panel is shared between org-scoped and system procedure editors. It accepts an optional `generateStream` prop to override the default API call:
+
+- **Org-scoped pages**: No prop needed — defaults to `proceduresApi.generateProcedureStream()` which uses the org context from `apiFetch`
+- **System pages**: Pass `generateStream` wrapping `systemCwrApi.generateProcedureStream()` which sets `X-Organization-Id` to the system org, avoiding the "Organization context required" 400 error
 
 ---
 

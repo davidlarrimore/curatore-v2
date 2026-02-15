@@ -6939,27 +6939,56 @@ export const systemCwrApi = {
     const decoder = new TextDecoder()
     let buffer = ''
     let finalResult: JsonRecord | null = null
+    let currentEventType = ''
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
+
+      // Parse SSE events from buffer (handle both \n and \r\n line endings)
+      const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() || ''
 
+      let hadEvents = false
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
+        if (line.startsWith('event: ')) {
+          currentEventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const data = line.slice(6)
           try {
-            const event = JSON.parse(line.slice(6))
-            if (onEvent) onEvent(event)
-            if (event.type === 'complete' || event.type === 'error') {
-              finalResult = event.type === 'complete'
-                ? { success: true, ...event }
-                : { success: false, error: event.error || event.message, attempts: event.attempts || 0, validation_errors: event.validation_errors || [] }
+            const parsed = JSON.parse(data) as GenerateStreamEvent
+            parsed.event = (currentEventType || parsed.event || 'message') as GenerateStreamEvent['event']
+            if (onEvent) onEvent(parsed)
+            hadEvents = true
+
+            if (currentEventType === 'complete' || parsed.event === 'complete') {
+              finalResult = {
+                success: parsed.success ?? false,
+                yaml: parsed.yaml,
+                procedure: parsed.procedure,
+                plan_json: parsed.plan_json,
+                error: parsed.error,
+                attempts: parsed.attempts ?? 0,
+                validation_errors: parsed.validation_errors ?? [],
+                validation_warnings: parsed.validation_warnings,
+                profile_used: parsed.profile_used,
+                diagnostics: parsed.diagnostics,
+                needs_clarification: parsed.needs_clarification,
+                clarification_message: parsed.clarification_message,
+              }
             }
-          } catch {}
+          } catch (e) {
+            console.warn('[SSE] Failed to parse event data:', e)
+          }
+          currentEventType = ''
         }
+      }
+
+      // Yield to browser so React can paint progress updates
+      if (hadEvents) {
+        await new Promise(resolve => setTimeout(resolve, 0))
       }
     }
 

@@ -10,6 +10,14 @@ interface AIGeneratorPanelProps {
   onYamlGenerated: (yaml: string) => void
   onSuccess?: (message: string) => void
   onError?: (message: string) => void
+  /** Optional override for the generate stream call (e.g. systemCwrApi for system org context) */
+  generateStream?: (
+    token: string | undefined,
+    prompt: string,
+    profile?: string,
+    currentPlan?: Record<string, unknown>,
+    onEvent?: (event: GenerateStreamEvent) => void,
+  ) => ReturnType<typeof proceduresApi.generateProcedureStream>
 }
 
 export interface AIGeneratorPanelHandle {
@@ -53,6 +61,7 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
   onYamlGenerated,
   onSuccess,
   onError,
+  generateStream,
 }, ref) {
   const { token } = useAuth()
   const [prompt, setPrompt] = useState('')
@@ -177,7 +186,8 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
         currentPlan = { _yaml: currentYaml }
       }
 
-      const result = await proceduresApi.generateProcedureStream(
+      const generate = generateStream ?? proceduresApi.generateProcedureStream
+      const result = await generate(
         token,
         promptText.trim(),
         'workflow_standard',

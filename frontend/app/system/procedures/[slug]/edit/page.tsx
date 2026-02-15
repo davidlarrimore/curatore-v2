@@ -894,6 +894,9 @@ function SystemProcedureEditor() {
                   setErrorMessage(msg)
                   setTimeout(() => setErrorMessage(''), 5000)
                 }}
+                generateStream={(_token, prompt, profile, currentPlan, onEvent) =>
+                  systemCwrApi.generateProcedureStream(prompt, profile, currentPlan, onEvent)
+                }
               />
             )}
 

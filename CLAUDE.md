@@ -456,6 +456,7 @@ Functions expose formal **tool contracts** — JSON Schema-based definitions wit
 - `backend/app/cwr/procedures/compiler/ai_generator.py` — Resolves org's enabled data sources and passes to contract pack; system prompt via `context_builder.py`
 - `backend/app/core/metadata/registry_service.py` — `get_enabled_data_sources()` returns active source types for an org
 - `frontend/lib/api.ts` — `contractsApi` client + `ToolContract` TypeScript interface; `FunctionMeta` with `input_schema`/`output_schema`
+- `frontend/components/procedures/AIGeneratorPanel.tsx` — AI procedure generator panel; accepts optional `generateStream` prop to override the API call (system pages pass `systemCwrApi.generateProcedureStream` for system org context)
 
 ### Governance in the Procedure Generator
 The AI generator enforces governance at two levels:
@@ -473,8 +474,8 @@ The AI generator enforces governance at two levels:
 3. External-exposure functions (email, webhook) are guarded with conditionals
 4. `requires_llm=true` functions fail without an LLM connection
 
-### Frontend: Function Catalog
-The procedure editor (`/admin/procedures/new`) displays governance metadata:
+### Frontend: Function Catalog & AI Generator
+The procedure editor (org: `/orgs/[slug]/admin/procedures/new`, system: `/system/procedures/new`) displays governance metadata:
 - **Badges**: Side effects (red/green), LLM Required (purple), Payload profile (blue/green/amber), Compound (gray)
 - **Tags**: As small pills on each function
 - **Output Schema**: Structured type, fields, and variants when expanded

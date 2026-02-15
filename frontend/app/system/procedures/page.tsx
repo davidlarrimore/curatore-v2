@@ -269,9 +269,9 @@ export default function SystemProceduresPage() {
     return Array.from(tags).sort()
   }, [procedures])
 
-  // Filter procedures
+  // Filter procedures — only show file-based (system) procedures
   const filteredProcedures = useMemo(() => {
-    let result = [...procedures]
+    let result = procedures.filter(p => p.is_system)
 
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
