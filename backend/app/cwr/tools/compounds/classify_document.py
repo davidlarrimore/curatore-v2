@@ -172,17 +172,35 @@ class ClassifyDocumentFunction(BaseFunction):
         )
 
         if content_result.failed:
-            return FunctionResult.failed_result(
-                error=content_result.error or "Failed to retrieve content",
-                message=f"get_content failed for asset {asset_id}",
+            # Content unavailable is a pre-condition issue, not a function bug —
+            # skip instead of failing so foreach summaries stay clean.
+            reason = content_result.error or "Failed to retrieve content"
+            # Try to extract filename from the content_result data if available
+            first_item = (content_result.data or [{}])[0] if content_result.data else {}
+            skip_filename = first_item.get("filename", "") if isinstance(first_item, dict) else ""
+            return FunctionResult.skipped_result(
+                message=f"Skipped '{skip_filename or asset_id}': {reason}",
+                data={
+                    "asset_id": str(asset_id),
+                    "filename": skip_filename,
+                    "file_path": first_item.get("file_path", "") if isinstance(first_item, dict) else "",
+                    "reason": reason,
+                    "skipped": True,
+                },
             )
 
         # Extract content and filename from the first (only) item
         items = content_result.data or []
         if not items:
-            return FunctionResult.failed_result(
-                error="Asset not found",
-                message=f"No content returned for asset {asset_id}",
+            return FunctionResult.skipped_result(
+                message=f"Skipped asset {asset_id}: Asset not found or not accessible",
+                data={
+                    "asset_id": str(asset_id),
+                    "filename": "",
+                    "file_path": "",
+                    "reason": "Asset not found or not accessible",
+                    "skipped": True,
+                },
             )
 
         asset_item = items[0]
@@ -191,9 +209,16 @@ class ClassifyDocumentFunction(BaseFunction):
         file_path = asset_item.get("file_path", "")
 
         if not content:
-            return FunctionResult.failed_result(
-                error=asset_item.get("content_error", "No extracted content available"),
-                message=f"No content available for asset {asset_id}",
+            reason = asset_item.get("content_error", "No extracted content available")
+            return FunctionResult.skipped_result(
+                message=f"Skipped '{filename or asset_id}': {reason}",
+                data={
+                    "asset_id": str(asset_id),
+                    "filename": filename,
+                    "file_path": file_path,
+                    "reason": reason,
+                    "skipped": True,
+                },
             )
 
         # ── Step 2: llm_classify ────────────────────────────────────────

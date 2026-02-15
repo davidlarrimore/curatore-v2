@@ -19,7 +19,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.shared.database_service import database_service
-from app.cwr.tools import FunctionContext, FunctionResult, fn
+from app.cwr.tools import FunctionContext, FunctionResult, FunctionStatus, fn
 from app.cwr.tools.base import FlowResult
 
 from ..store.definitions import OnErrorPolicy, ProcedureDefinition, StepDefinition
@@ -247,9 +247,9 @@ class ProcedureExecutor:
                 step_results[step.name] = result
 
                 # Store result for subsequent steps
-                # Include data for both "success" and "partial" — partial results
-                # (e.g. foreach where some items failed) still have useful data
-                ctx.set_step_result(step.name, result.get("data") if result.get("status") in ("success", "partial") else None)
+                # Include data for "success", "partial", and "skipped" — all may
+                # contain useful data for downstream steps
+                ctx.set_step_result(step.name, result.get("data") if result.get("status") in ("success", "partial", "skipped") else None)
 
                 # Handle step failure
                 if result.get("status") == "failed":
@@ -580,10 +580,12 @@ class ProcedureExecutor:
                         flow_log_context[key] = flow_result[key]
                 if item_index is not None:
                     flow_log_context["item_index"] = item_index
+                flow_status = flow_result.get("status")
+                flow_log_level = "INFO" if flow_status == "success" else ("WARN" if flow_status == "partial" else "ERROR")
                 await ctx.log_run_event(
-                    level="INFO" if flow_result.get("status") == "success" else "ERROR",
+                    level=flow_log_level,
                     event_type="step_complete",
-                    message=f"Step {step.name}: {flow_result.get('status')}" + (f" (item {item_index})" if item_index is not None else ""),
+                    message=f"Step {step.name}: {flow_status}" + (f" (item {item_index})" if item_index is not None else ""),
                     context=flow_log_context,
                 )
                 return flow_result
@@ -606,7 +608,7 @@ class ProcedureExecutor:
             if item_index is not None:
                 log_context["item_index"] = item_index
             await ctx.log_run_event(
-                level="INFO" if result.success else "ERROR",
+                level="INFO" if result.success else ("WARN" if result.status == FunctionStatus.SKIPPED else "ERROR"),
                 event_type="step_complete",
                 message=f"Step {step.name}: {result.status.value}" + (f" (item {item_index})" if item_index is not None else ""),
                 context=log_context,
@@ -881,13 +883,17 @@ class ProcedureExecutor:
         # Execute for each item
         results = [None] * len(items)  # Preserve original indices
         failed_count = 0
+        skipped_count = 0
 
         if concurrency == 1:
             # Sequential execution
             for orig_idx, item in filtered_items:
                 result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
                 results[orig_idx] = result.get("data")
-                if result.get("status") == "failed":
+                item_status = result.get("status")
+                if item_status == "skipped":
+                    skipped_count += 1
+                elif item_status == "failed":
                     failed_count += 1
                     if on_error == OnErrorPolicy.FAIL:
                         break
@@ -935,24 +941,34 @@ class ProcedureExecutor:
                     continue
                 orig_idx, result = task_result
                 results[orig_idx] = result.get("data")
-                if result.get("status") == "failed":
+                item_status = result.get("status")
+                if item_status == "skipped":
+                    skipped_count += 1
+                elif item_status == "failed":
                     logger.warning(f"[foreach {step.name}] item {orig_idx} failed: {result.get('error', 'unknown')}")
                     failed_count += 1
 
-        # Determine status
-        if failed_count == len(filtered_items):
+        # Determine status — skipped items don't count as failures
+        actually_ran = len(filtered_items) - skipped_count
+        if actually_ran == 0:
+            status = "success"
+        elif failed_count == actually_ran:
             status = "failed"
         elif failed_count > 0:
             status = "partial"
         else:
             status = "success"
 
+        total_skipped = len(skipped_indices) + skipped_count
+        succeeded = actually_ran - failed_count
+        skip_suffix = f", {total_skipped} skipped" if total_skipped else ""
+
         return {
             "status": status,
             "data": results,
-            "message": f"Processed {len(filtered_items) - failed_count}/{len(filtered_items)} items",
-            "items_processed": len(filtered_items),
-            "items_skipped": len(skipped_indices),
+            "message": f"Processed {succeeded}/{actually_ran} items{skip_suffix}",
+            "items_processed": actually_ran,
+            "items_skipped": total_skipped,
             "items_failed": failed_count,
             "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
         }
@@ -991,7 +1007,7 @@ class ProcedureExecutor:
                 result = await self._execute_step_single(ctx, branch_step, func, item=item, item_index=item_index)
 
             # Store result for subsequent steps in this branch
-            ctx.set_step_result(branch_step.name, result.get("data") if result.get("status") == "success" else None)
+            ctx.set_step_result(branch_step.name, result.get("data") if result.get("status") in ("success", "partial", "skipped") else None)
             last_data = result.get("data")
 
             # Handle errors
@@ -1089,6 +1105,7 @@ class ProcedureExecutor:
         # Execute for each item
         results = []
         failed_count = 0
+        skipped_count = 0
         total_duration_ms = 0
         start_time = datetime.utcnow()
 
@@ -1104,14 +1121,17 @@ class ProcedureExecutor:
                 item_id = str(idx)
 
             # Collect result
+            item_status = item_result.get("status")
             results.append({
                 "item_id": item_id,
-                "success": item_result.get("status") == "success",
+                "success": item_status == "success",
                 "result": item_result.get("data"),
                 "error": item_result.get("error"),
             })
 
-            if item_result.get("status") != "success":
+            if item_status == "skipped":
+                skipped_count += 1
+            elif item_status != "success":
                 failed_count += 1
 
             if item_result.get("duration_ms"):
@@ -1120,23 +1140,30 @@ class ProcedureExecutor:
         # Calculate total duration
         total_duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 
-        # Determine overall status
-        if failed_count == len(items):
+        # Determine overall status — skipped items don't count as failures
+        actually_ran = len(items) - skipped_count
+        if actually_ran == 0:
+            status = "success"
+        elif failed_count == actually_ran:
             status = "failed"
         elif failed_count > 0:
             status = "partial"
         else:
             status = "success"
 
+        succeeded = actually_ran - failed_count
+        skip_suffix = f", {skipped_count} skipped" if skipped_count else ""
+
         # Log foreach completion
         await ctx.log_run_event(
             level="INFO" if status == "success" else "WARN" if status == "partial" else "ERROR",
             event_type="step_complete",
-            message=f"Step {step.name}: {status} ({len(items) - failed_count}/{len(items)} succeeded)",
+            message=f"Step {step.name}: {status} ({succeeded}/{actually_ran} succeeded{skip_suffix})",
             context={
                 "step": step.name,
                 "status": status,
-                "items_processed": len(items),
+                "items_processed": actually_ran,
+                "items_skipped": skipped_count,
                 "items_failed": failed_count,
                 "duration_ms": total_duration_ms,
             },
@@ -1145,8 +1172,9 @@ class ProcedureExecutor:
         return {
             "status": status,
             "data": results,
-            "message": f"Processed {len(items) - failed_count}/{len(items)} items",
-            "items_processed": len(items),
+            "message": f"Processed {succeeded}/{actually_ran} items{skip_suffix}",
+            "items_processed": actually_ran,
+            "items_skipped": skipped_count,
             "items_failed": failed_count,
             "duration_ms": total_duration_ms,
         }
