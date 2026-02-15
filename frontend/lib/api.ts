@@ -6872,6 +6872,34 @@ export const systemCwrApi = {
     return handleJson(res)
   },
 
+  async runProcedure(
+    slug: string,
+    params: JsonRecord = {},
+    dryRun: boolean = false,
+    asyncExecution: boolean = true
+  ): Promise<ProcedureRunResponse> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/run`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
+    })
+    return handleJson(res)
+  },
+
+  async enableProcedure(slug: string): Promise<{ status: string; message: string }> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/enable`, {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async disableProcedure(slug: string): Promise<{ status: string; message: string }> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/disable`, {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
   async generateProcedureStream(
     prompt: string,
     profile?: string,

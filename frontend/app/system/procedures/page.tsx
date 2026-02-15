@@ -3,14 +3,17 @@
 /**
  * System Procedures list page.
  *
- * Manage system-level procedures (no Run button). Uses systemCwrApi for the
- * system org context. Supports create, edit, delete, and toggle active state.
+ * Manage system-level procedures. Uses systemCwrApi for the
+ * system org context. Supports create, edit, delete, run, and toggle active state.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import YAML from 'yaml'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useActiveJobs } from '@/lib/context-shims'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
+import { useJobProgressByType } from '@/lib/useJobProgress'
 import { systemCwrApi, type ProcedureListItem, type Procedure } from '@/lib/api'
 import { formatTimeAgo, formatTimeUntil, formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -18,6 +21,7 @@ import {
   RefreshCw,
   Workflow,
   Search,
+  Play,
   CheckCircle,
   AlertTriangle,
   Loader2,
@@ -97,6 +101,10 @@ function formatCronExpression(cron: string): string {
 
 export default function SystemProceduresPage() {
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
+  const { isActive: hasRunningProcedures } = useJobProgressByType('procedure', {
+    onComplete: () => loadData(true),
+  })
 
   const [procedures, setProcedures] = useState<ProcedureListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -114,6 +122,8 @@ export default function SystemProceduresPage() {
   const [loadingDetails, setLoadingDetails] = useState(false)
 
   // Action states
+  const [runningProcedure, setRunningProcedure] = useState<string | null>(null)
+  const [togglingProcedure, setTogglingProcedure] = useState<string | null>(null)
   const [deletingProcedure, setDeletingProcedure] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<ProcedureListItem | null>(null)
 
@@ -177,6 +187,58 @@ export default function SystemProceduresPage() {
       setTimeout(() => setError(''), 5000)
     } finally {
       setLoadingDetails(false)
+    }
+  }
+
+  // Run procedure
+  const handleRun = async (slug: string) => {
+    if (!token) return
+
+    const procedure = procedures.find(p => p.slug === slug)
+    setRunningProcedure(slug)
+    try {
+      const result = await systemCwrApi.runProcedure(slug, {}, false, true)
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'procedure',
+          displayName: procedure?.name || slug,
+          resourceId: slug,
+          resourceType: 'procedure',
+        })
+      }
+      setSuccessMessage(`Procedure ${slug} started (Run ID: ${result.run_id})`)
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : `Failed to run procedure ${slug}`
+      setError(message)
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setRunningProcedure(null)
+    }
+  }
+
+  // Toggle procedure active state
+  const handleToggleActive = async (procedure: ProcedureListItem) => {
+    if (!token) return
+
+    setTogglingProcedure(procedure.slug)
+    try {
+      if (procedure.is_active) {
+        await systemCwrApi.disableProcedure(procedure.slug)
+        setSuccessMessage(`Procedure "${procedure.name}" scheduling has been disabled`)
+      } else {
+        await systemCwrApi.enableProcedure(procedure.slug)
+        setSuccessMessage(`Procedure "${procedure.name}" scheduling has been enabled`)
+      }
+      await loadData(true)
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to toggle procedure'
+      setError(message)
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setTogglingProcedure(null)
     }
   }
 
@@ -379,6 +441,13 @@ export default function SystemProceduresPage() {
           </p>
         </div>
 
+        {/* Active procedure jobs */}
+        <JobProgressPanelByType
+          jobType="procedure"
+          variant="compact"
+          className="px-6 py-3 space-y-2 border-b border-gray-200 dark:border-gray-700"
+        />
+
         {filteredProcedures.length === 0 ? (
           <div className="p-12 text-center">
             <Workflow className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
@@ -441,25 +510,58 @@ export default function SystemProceduresPage() {
                       </p>
                     )}
 
-                    <div className="mt-2 ml-6 flex items-center gap-4">
-                      <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">
-                        {procedure.slug}
-                      </span>
-                      <span className="text-xs text-gray-400 dark:text-gray-500">
-                        v{procedure.version}
-                      </span>
-                      {procedure.tags.length > 0 && (
-                        <div className="flex items-center gap-1">
-                          {procedure.tags.map(tag => (
-                            <span
-                              key={tag}
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                            >
-                              <Tag className="w-3 h-3" />
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
+                    <div className="mt-2 ml-6 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">
+                          {procedure.slug}
+                        </span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500">
+                          v{procedure.version}
+                        </span>
+                        {procedure.tags.length > 0 && (
+                          <div className="flex items-center gap-1">
+                            {procedure.tags.map(tag => (
+                              <span
+                                key={tag}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                              >
+                                <Tag className="w-3 h-3" />
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {procedure.trigger_count > 0 && (
+                        <button
+                          onClick={() => handleToggleActive(procedure)}
+                          disabled={togglingProcedure === procedure.slug}
+                          title={procedure.is_active ? 'Disable scheduling' : 'Enable scheduling'}
+                          className="flex items-center gap-2"
+                        >
+                          <span className="text-xs text-gray-400 dark:text-gray-500">Schedule</span>
+                          {togglingProcedure === procedure.slug ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                          ) : (
+                            <div className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                              procedure.is_active
+                                ? 'bg-emerald-500'
+                                : 'bg-gray-300 dark:bg-gray-600'
+                            }`}>
+                              <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                                procedure.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                              }`} />
+                            </div>
+                          )}
+                          <span className={`text-xs font-medium w-6 ${
+                            procedure.is_active
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-gray-400 dark:text-gray-500'
+                          }`}>
+                            {procedure.is_active ? 'On' : 'Off'}
+                          </span>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -472,6 +574,19 @@ export default function SystemProceduresPage() {
                         Edit
                       </button>
                     </Link>
+
+                    <button
+                      onClick={() => handleRun(procedure.slug)}
+                      disabled={runningProcedure === procedure.slug}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {runningProcedure === procedure.slug ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Play className="w-4 h-4" />
+                      )}
+                      Run
+                    </button>
 
                     <div className="relative group/delete">
                       <button

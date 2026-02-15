@@ -5,6 +5,8 @@ import { useRouter, useParams } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import YAML from 'yaml'
 import { useAuth } from '@/lib/auth-context'
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+import { useJobProgress } from '@/lib/useJobProgress'
 import {
   systemCwrApi,
   type UpdateProcedureRequest,
@@ -16,6 +18,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import {
   Save,
+  Play,
   RotateCcw,
   AlertTriangle,
   CheckCircle,
@@ -33,6 +36,7 @@ import {
   Box,
 } from 'lucide-react'
 import type { AIGeneratorPanelHandle } from '@/components/procedures/AIGeneratorPanel'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 
 // Lazy load the AI Generator Panel - heavy component with SSE streaming
 const AIGeneratorPanel = dynamic(
@@ -59,6 +63,10 @@ function SystemProcedureEditor() {
   const params = useParams()
   const slug = params.slug as string
   const { token } = useAuth()
+  const { addJob } = useUnifiedJobs()
+  const { isActive: isProcedureRunning } = useJobProgress('procedure', slug, {
+    onComplete: () => loadProcedure(),
+  })
 
   // Procedure state
   const [procedure, setProcedure] = useState<Procedure | null>(null)
@@ -74,6 +82,7 @@ function SystemProcedureEditor() {
   const [isSaving, setIsSaving] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isTogglingSchedule, setIsTogglingSchedule] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
@@ -265,6 +274,30 @@ function SystemProcedureEditor() {
     }
   }
 
+  // Run procedure
+  const handleRun = async () => {
+    if (!procedure) return
+
+    try {
+      const result = await systemCwrApi.runProcedure(procedure.slug, {}, false, true)
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'procedure',
+          displayName: procedure.name,
+          resourceId: procedure.slug,
+          resourceType: 'procedure',
+        })
+      }
+      setSuccessMessage(`Procedure started! Run ID: ${result.run_id}`)
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to run procedure'
+      setErrorMessage(message)
+      setTimeout(() => setErrorMessage(''), 5000)
+    }
+  }
+
   // Delete procedure
   const handleDelete = async () => {
     if (!procedure) return
@@ -281,6 +314,31 @@ function SystemProcedureEditor() {
     } finally {
       setIsDeleting(false)
       setShowDeleteConfirm(false)
+    }
+  }
+
+  // Toggle scheduling (enable/disable procedure)
+  const handleToggleSchedule = async () => {
+    if (!procedure) return
+
+    setIsTogglingSchedule(true)
+    try {
+      if (procedure.is_active) {
+        await systemCwrApi.disableProcedure(procedure.slug)
+        setProcedure({ ...procedure, is_active: false })
+        setSuccessMessage(`Scheduling has been disabled for "${procedure.name}"`)
+      } else {
+        await systemCwrApi.enableProcedure(procedure.slug)
+        setProcedure({ ...procedure, is_active: true })
+        setSuccessMessage(`Scheduling has been enabled for "${procedure.name}"`)
+      }
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to toggle scheduling'
+      setErrorMessage(message)
+      setTimeout(() => setErrorMessage(''), 5000)
+    } finally {
+      setIsTogglingSchedule(false)
     }
   }
 
@@ -426,6 +484,37 @@ function SystemProcedureEditor() {
                   Unsaved changes
                 </span>
               )}
+
+              {procedure && procedure.triggers.length > 0 && (
+                <button
+                  onClick={handleToggleSchedule}
+                  disabled={isTogglingSchedule}
+                  title={procedure.is_active ? 'Disable scheduling' : 'Enable scheduling'}
+                  className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-200 dark:border-gray-700"
+                >
+                  <span className="text-xs text-gray-400 dark:text-gray-500">Schedule</span>
+                  {isTogglingSchedule ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                  ) : (
+                    <div className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      procedure.is_active
+                        ? 'bg-emerald-500'
+                        : 'bg-gray-300 dark:bg-gray-600'
+                    }`}>
+                      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                        procedure.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                      }`} />
+                    </div>
+                  )}
+                  <span className={`text-xs font-medium w-6 ${
+                    procedure.is_active
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-gray-400 dark:text-gray-500'
+                  }`}>
+                    {procedure.is_active ? 'On' : 'Off'}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Control buttons */}
@@ -449,6 +538,20 @@ function SystemProcedureEditor() {
               >
                 <RotateCcw className="w-4 h-4" />
                 Reset
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleRun}
+                disabled={isProcedureRunning || isDirty}
+                className="gap-2"
+                title={isDirty ? 'Save changes before running' : isProcedureRunning ? 'Procedure is already running' : undefined}
+              >
+                {isProcedureRunning ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+                {isProcedureRunning ? 'Running' : 'Run'}
               </Button>
               <Button
                 variant="primary"
@@ -531,6 +634,16 @@ function SystemProcedureEditor() {
           </div>
         </div>
       )}
+
+      {/* Job progress banner */}
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <JobProgressPanel
+          resourceType="procedure"
+          resourceId={slug}
+          variant="default"
+          className="space-y-3"
+        />
+      </div>
 
       {/* Main content - two panels */}
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
