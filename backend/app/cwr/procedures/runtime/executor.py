@@ -45,6 +45,7 @@ class ProcedureExecutor:
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
         dry_run: bool = False,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a procedure by slug.
@@ -61,6 +62,7 @@ class ProcedureExecutor:
             user_id: User who triggered execution
             run_id: Existing run ID (if called from task)
             dry_run: If true, don't make changes
+            organization_ids: Multi-org context for CWR functions
 
         Returns:
             Execution results including step outputs
@@ -102,6 +104,7 @@ class ProcedureExecutor:
             run_id=run_id,
             dry_run=dry_run,
             is_system_context=is_system,
+            organization_ids=organization_ids,
         )
 
     async def _load_from_database(
@@ -151,6 +154,7 @@ class ProcedureExecutor:
         run_id: Optional[UUID] = None,
         dry_run: bool = False,
         is_system_context: bool = False,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a procedure definition.
@@ -178,6 +182,7 @@ class ProcedureExecutor:
         ctx = await FunctionContext.create(
             session=session,
             organization_id=organization_id,
+            organization_ids=organization_ids,
             user_id=user_id,
             run_id=run_id,
             procedure_id=None,  # Will be set if procedure is in DB
@@ -755,6 +760,7 @@ class ProcedureExecutor:
                     branch_ctx = await FunctionContext.create(
                         session=branch_session,
                         organization_id=ctx.organization_id,
+                        organization_ids=ctx.organization_ids,
                         user_id=ctx.user_id,
                         run_id=ctx.run_id,
                         dry_run=ctx.dry_run,
@@ -892,6 +898,7 @@ class ProcedureExecutor:
                         item_ctx = await FunctionContext.create(
                             session=item_session,
                             organization_id=ctx.organization_id,
+                            organization_ids=ctx.organization_ids,
                             user_id=ctx.user_id,
                             run_id=ctx.run_id,
                             dry_run=ctx.dry_run,

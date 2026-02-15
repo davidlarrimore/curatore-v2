@@ -1154,7 +1154,8 @@ export const authApi = {
       username: string
       full_name?: string
       role: string
-      organization_id: string | null
+      organization_id: string | null  // Deprecated: use organizations[]
+      organizations: Array<{ id: string; name: string; slug: string }>
     }
   }> {
     const res = await apiFetch('/admin/auth/login', {
@@ -1215,8 +1216,9 @@ export const authApi = {
     username: string
     full_name?: string
     role: string
-    organization_id: string | null
-    organization_name: string | null
+    organization_id: string | null  // Deprecated: use organizations[]
+    organization_name: string | null  // Deprecated: use organizations[]
+    organizations: Array<{ id: string; name: string; slug: string }>
     is_active: boolean
   }> {
     const res = await apiFetch('/admin/auth/me', {
@@ -1970,7 +1972,6 @@ export const usersApi = {
       created_at: string
       last_login_at?: string | null
       is_member?: boolean | null
-      is_primary_org?: boolean | null
     }>
     total: number
   }> {

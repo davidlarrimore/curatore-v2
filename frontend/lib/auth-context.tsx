@@ -28,14 +28,21 @@ import { useRouter, usePathname } from 'next/navigation'
 import toast from 'react-hot-toast'
 import { authApi } from './api'
 
+interface UserOrganization {
+  id: string
+  name: string
+  slug: string
+}
+
 interface User {
   id: string
   email: string
   username: string
   full_name?: string
   role: string
-  organization_id: string | null  // null for system admins
-  organization_name: string | null  // null for system admins
+  organization_id: string | null  // Deprecated: first membership org for backward compat
+  organization_name: string | null  // Deprecated: first membership org name
+  organizations: UserOrganization[]  // All org memberships
   is_active: boolean
 }
 

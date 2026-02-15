@@ -8,7 +8,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from app.celery_app import app as celery_app
 from app.core.shared.database_service import database_service
@@ -22,6 +22,7 @@ def execute_procedure_task(
     procedure_slug: str,
     params: Dict[str, Any] = None,
     user_id: str = None,
+    organization_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Execute a procedure asynchronously.
@@ -35,6 +36,7 @@ def execute_procedure_task(
         procedure_slug: Slug of the procedure to execute
         params: Parameters to pass to the procedure
         user_id: Optional user UUID who triggered the execution
+        organization_ids: Optional list of org UUID strings for multi-org context
 
     Returns:
         Dict with procedure execution results
@@ -50,6 +52,7 @@ def execute_procedure_task(
                 procedure_slug=procedure_slug,
                 params=params or {},
                 user_id=uuid.UUID(user_id) if user_id else None,
+                organization_ids=[uuid.UUID(oid) for oid in organization_ids] if organization_ids else None,
             )
         )
 
@@ -69,6 +72,7 @@ async def _execute_procedure_async(
     procedure_slug: str,
     params: Dict[str, Any],
     user_id,
+    organization_ids=None,
 ) -> Dict[str, Any]:
     """Async implementation of procedure execution."""
     from app.core.shared.run_service import run_service
@@ -87,6 +91,7 @@ async def _execute_procedure_async(
             params=params,
             user_id=user_id,
             run_id=run_id,
+            organization_ids=organization_ids,
         )
 
         # Complete or fail the run based on result

@@ -372,7 +372,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
         # Search using the main search service with collection filter
         search_results = await ctx.search_service.search(
             session=ctx.session,
-            organization_id=ctx.requires_org_id,
+            organization_ids=ctx.org_ids_for_service,
             query=keyword,
             search_mode=search_mode,
             semantic_weight=semantic_weight,

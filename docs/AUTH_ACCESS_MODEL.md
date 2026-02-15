@@ -7,7 +7,7 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 | Role | Scope | Organization | Data Access | CWR Functions | Procedures | System Config |
 |------|-------|-------------|-------------|---------------|------------|---------------|
 | `admin` | System-wide | `organization_id=NULL`, accesses orgs via `X-Organization-Id` header | All orgs (cross-org in system context, filtered in org context) | All (including side-effect tools); system context sees all tools regardless of data sources | Full CRUD + `admin_full` generation profile + system procedures | Full (services, connections, LLM, orgs) |
-| `member` | Multi-org via memberships | `organization_id=<primary_org_uuid>`, access other orgs via `X-Organization-Id` + membership | Orgs with membership | All (including side-effect tools); filtered by org's enabled data sources | Run + `workflow_standard` generation profile | None |
+| `member` | Multi-org via memberships | Org access via `user_organization_memberships`; `X-Organization-Id` header to switch | Orgs with membership | All (including side-effect tools); filtered by org's enabled data sources | Run + `workflow_standard` generation profile | None |
 
 ---
 
@@ -20,10 +20,11 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 - **Org context** (with header): filtered view — data scoped to the selected org
 
 ### Non-Admin Users (Multi-Org Membership)
-- Default org: `user.organization_id` (used when no `X-Organization-Id` header is sent)
-- Can access other orgs via `X-Organization-Id` header **if** they have a `user_organization_memberships` row for that org
+- All org access is through `user_organization_memberships` rows (no primary org concept)
+- Default org (when no `X-Organization-Id` header): first membership by `created_at`
+- Can access other orgs via `X-Organization-Id` header **if** they have a membership row for that org
 - Membership rows are managed by admins via `PUT /admin/organizations/me/users/memberships/{user_id}`
-- A membership row is automatically created for the user's primary org on user creation
+- CWR functions (MCP/Open WebUI) query across **all** member orgs when no `X-Organization-Id` header is present
 - Cannot access orgs they don't have membership for (403)
 
 ### Dependencies
@@ -37,8 +38,9 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 | `get_current_user_or_delegated` | `User` | Flexible auth: JWT, user API key, or delegated (ServiceAccount + X-On-Behalf-Of). Used by CWR endpoints. |
 | `get_effective_org_id_or_delegated` | `Optional[UUID]` | Cross-org views with delegated auth support. |
 | `get_current_org_id_or_delegated` | `UUID` (required) | Org-scoped operations with delegated auth support. |
+| `get_user_org_ids` | `List[UUID]` | All org IDs the user can access. Used by CWR endpoints for multi-org scoping. |
 
-**Implementation rule**: ALWAYS use `get_current_org_id` or `get_effective_org_id` (or their `_or_delegated` variants for CWR endpoints) — NEVER `current_user.organization_id` directly.
+**Implementation rule**: ALWAYS use `get_current_org_id` or `get_effective_org_id` (or their `_or_delegated` variants for CWR endpoints) — NEVER `current_user.organization_id` directly. For CWR functions that need multi-org scoping, use `get_user_org_ids`.
 
 ---
 

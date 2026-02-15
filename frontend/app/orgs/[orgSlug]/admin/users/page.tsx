@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth-context'
 import { useOrgUrl } from '@/lib/org-url-context'
 import { usersApi } from '@/lib/api'
 import { Badge } from '@/components/ui/Badge'
-import { Users, Search, Loader2, Star } from 'lucide-react'
+import { Users, Search, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 interface MembershipUser {
@@ -23,7 +23,6 @@ interface MembershipUser {
   role: string
   is_active: boolean
   is_member?: boolean | null
-  is_primary_org?: boolean | null
   created_at: string
   last_login_at?: string | null
 }
@@ -189,11 +188,6 @@ export default function UsersPage() {
                                 <span className="text-sm font-medium text-gray-900 dark:text-white">
                                   {user.full_name || user.username}
                                 </span>
-                                {user.is_primary_org && (
-                                  <span title="Primary organization" className="text-amber-500">
-                                    <Star className="h-3.5 w-3.5 fill-current" />
-                                  </span>
-                                )}
                               </div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">
                                 {user.email}

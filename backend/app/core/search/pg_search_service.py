@@ -212,15 +212,34 @@ class PgSearchService:
         joiner = " & " if len(words) <= 3 else " | "
         return joiner.join(f"{word}:*" for word in words)
 
-    def _build_base_filters(self, organization_id: UUID) -> Tuple[List[str], Dict[str, Any]]:
+    def _build_base_filters(
+        self,
+        organization_id: Optional[UUID] = None,
+        organization_ids: Optional[List[UUID]] = None,
+    ) -> Tuple[List[str], Dict[str, Any]]:
         """
         Build base filter clause and params for organization scoping.
+
+        Args:
+            organization_id: Single org ID (legacy, backward-compatible).
+            organization_ids: Multiple org IDs for multi-org context.
+                If provided, takes precedence over organization_id.
 
         Returns:
             Tuple of (filters list, params dict)
         """
-        filters = ["sc.organization_id = :org_id"]
-        params: Dict[str, Any] = {"org_id": str(organization_id)}
+        if organization_ids and len(organization_ids) > 1:
+            placeholders = ", ".join(f":org_id_{i}" for i in range(len(organization_ids)))
+            filters = [f"sc.organization_id IN ({placeholders})"]
+            params: Dict[str, Any] = {f"org_id_{i}": str(oid) for i, oid in enumerate(organization_ids)}
+        elif organization_ids and len(organization_ids) == 1:
+            filters = ["sc.organization_id = :org_id"]
+            params = {"org_id": str(organization_ids[0])}
+        elif organization_id:
+            filters = ["sc.organization_id = :org_id"]
+            params = {"org_id": str(organization_id)}
+        else:
+            filters, params = [], {}  # No org filter (system context)
         return filters, params
 
     # =========================================================================
@@ -926,8 +945,8 @@ class PgSearchService:
     async def search(
         self,
         session: AsyncSession,
-        organization_id: UUID,
-        query: str,
+        organization_id: Optional[UUID] = None,
+        query: str = "",
         search_mode: str = "hybrid",
         semantic_weight: float = 0.5,
         source_types: Optional[List[str]] = None,
@@ -942,6 +961,7 @@ class PgSearchService:
         facet_filters: Optional[Dict[str, Any]] = None,
         limit: int = 20,
         offset: int = 0,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> SearchResults:
         """
         Execute a search query with optional filters.
@@ -971,7 +991,10 @@ class PgSearchService:
         """
         try:
             # Build filter conditions
-            filters, params = self._build_base_filters(organization_id)
+            filters, params = self._build_base_filters(
+                organization_id=organization_id,
+                organization_ids=organization_ids,
+            )
 
             # Map display names to source_type values for Salesforce
             salesforce_display_map = {
@@ -1171,8 +1194,8 @@ class PgSearchService:
     async def search_sam(
         self,
         session: AsyncSession,
-        organization_id: UUID,
-        query: str,
+        organization_id: Optional[UUID] = None,
+        query: str = "",
         search_mode: str = "hybrid",
         semantic_weight: float = 0.5,
         source_types: Optional[List[str]] = None,
@@ -1187,6 +1210,7 @@ class PgSearchService:
         include_sam_assets: bool = False,
         limit: int = 20,
         offset: int = 0,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> SearchResults:
         """
         Search SAM.gov notices and solicitations.
@@ -1216,7 +1240,10 @@ class PgSearchService:
         from datetime import timedelta
 
         try:
-            filters, params = self._build_base_filters(organization_id)
+            filters, params = self._build_base_filters(
+                organization_id=organization_id,
+                organization_ids=organization_ids,
+            )
 
             # SAM-specific source types
             if source_types:
@@ -1331,8 +1358,8 @@ class PgSearchService:
     async def search_salesforce(
         self,
         session: AsyncSession,
-        organization_id: UUID,
-        query: str,
+        organization_id: Optional[UUID] = None,
+        query: str = "",
         search_mode: str = "hybrid",
         semantic_weight: float = 0.5,
         entity_types: Optional[List[str]] = None,
@@ -1340,6 +1367,7 @@ class PgSearchService:
         stages: Optional[List[str]] = None,
         limit: int = 20,
         offset: int = 0,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> SearchResults:
         """
         Search Salesforce accounts, contacts, and opportunities.
@@ -1360,7 +1388,10 @@ class PgSearchService:
             SearchResults with Salesforce content
         """
         try:
-            filters, params = self._build_base_filters(organization_id)
+            filters, params = self._build_base_filters(
+                organization_id=organization_id,
+                organization_ids=organization_ids,
+            )
 
             # Salesforce-specific source types
             if entity_types:
@@ -1412,8 +1443,8 @@ class PgSearchService:
     async def search_forecasts(
         self,
         session: AsyncSession,
-        organization_id: UUID,
-        query: str,
+        organization_id: Optional[UUID] = None,
+        query: str = "",
         search_mode: str = "hybrid",
         semantic_weight: float = 0.5,
         source_types: Optional[List[str]] = None,
@@ -1422,6 +1453,7 @@ class PgSearchService:
         naics_code: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        organization_ids: Optional[List[UUID]] = None,
     ) -> SearchResults:
         """
         Search acquisition forecasts across all sources (AG, APFS, State).
@@ -1443,7 +1475,10 @@ class PgSearchService:
             SearchResults with forecast content
         """
         try:
-            filters, params = self._build_base_filters(organization_id)
+            filters, params = self._build_base_filters(
+                organization_id=organization_id,
+                organization_ids=organization_ids,
+            )
 
             # Map user-facing source types to internal source_type values
             forecast_type_map = {

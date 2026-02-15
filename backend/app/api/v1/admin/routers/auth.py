@@ -33,7 +33,7 @@ from app.config import settings
 from app.core.auth.auth_service import auth_service
 from app.core.auth.password_reset_service import password_reset_service
 from app.core.auth.verification_service import verification_service
-from app.core.database.models import Organization, User
+from app.core.database.models import Organization, User, UserOrganizationMembership
 from app.core.shared.database_service import database_service
 from app.dependencies import get_current_user
 
@@ -119,6 +119,13 @@ class TokenResponse(BaseModel):
         }
 
 
+class UserOrganizationBrief(BaseModel):
+    """Brief organization info for user profile."""
+    id: str
+    name: str
+    slug: str
+
+
 class UserProfileResponse(BaseModel):
     """User profile response."""
 
@@ -126,10 +133,12 @@ class UserProfileResponse(BaseModel):
     email: str = Field(..., description="User's email address")
     username: str = Field(..., description="Username")
     full_name: Optional[str] = Field(None, description="User's full name")
-    role: str = Field(..., description="User role (org_admin, member, viewer)")
+    role: str = Field(..., description="User role (admin, member)")
     is_active: bool = Field(..., description="Whether user account is active")
     is_verified: bool = Field(..., description="Whether email is verified")
-    organization_id: Optional[str] = Field(None, description="Organization UUID (null for system admins)")
+    organization_id: Optional[str] = Field(None, description="Deprecated: first membership org ID for backward compatibility")
+    organization_name: Optional[str] = Field(None, description="Deprecated: first membership org name")
+    organizations: list = Field(default_factory=list, description="All org memberships")
     created_at: datetime = Field(..., description="Account creation timestamp")
     last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
 
@@ -143,7 +152,9 @@ class UserProfileResponse(BaseModel):
                 "role": "member",
                 "is_active": True,
                 "is_verified": True,
-                "organization_id": "987fcdeb-51a2-43f7-8b6a-123456789abc",
+                "organization_id": None,
+                "organization_name": None,
+                "organizations": [{"id": "987fcdeb-51a2-43f7-8b6a-123456789abc", "name": "Acme Corp", "slug": "acme-corp"}],
                 "created_at": "2024-01-01T00:00:00",
                 "last_login_at": "2024-01-12T15:30:00",
             }
@@ -310,19 +321,28 @@ async def register(request: UserRegisterRequest) -> UserProfileResponse:
         # Hash password
         password_hash = await auth_service.hash_password(request.password)
 
-        # Create user
+        # Create user (no primary org — memberships are source of truth)
         new_user = User(
             email=request.email,
             username=request.username,
             password_hash=password_hash,
             full_name=request.full_name,
-            organization_id=org_id,
+            organization_id=None,
             role="member",  # Default role
             is_active=True,
             is_verified=False,  # Email verification required
         )
 
         session.add(new_user)
+        await session.flush()  # Get new_user.id before creating membership
+
+        # Create membership
+        membership = UserOrganizationMembership(
+            user_id=new_user.id,
+            organization_id=org_id,
+        )
+        session.add(membership)
+
         await session.commit()
         await session.refresh(new_user)
 
@@ -350,7 +370,8 @@ async def register(request: UserRegisterRequest) -> UserProfileResponse:
             role=new_user.role,
             is_active=new_user.is_active,
             is_verified=new_user.is_verified,
-            organization_id=str(new_user.organization_id) if new_user.organization_id else None,
+            organization_id=str(org_id),
+            organizations=[{"id": str(org_id), "name": org.name if org else "", "slug": org.slug if org else ""}],
             created_at=new_user.created_at,
             last_login_at=new_user.last_login_at,
         )
@@ -418,16 +439,13 @@ async def login(request: UserLoginRequest) -> TokenResponse:
         await session.commit()
 
         # Generate tokens
-        org_id_str = str(user.organization_id) if user.organization_id else None
         access_token = auth_service.create_access_token(
             user_id=str(user.id),
-            organization_id=org_id_str,
             role=user.role,
         )
 
         refresh_token = auth_service.create_refresh_token(
             user_id=str(user.id),
-            organization_id=org_id_str,
         )
 
         logger.info(f"Login successful: {user.email}")
@@ -495,16 +513,13 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenResponse:
                 )
 
             # Generate new tokens
-            org_id_str = str(user.organization_id) if user.organization_id else None
             access_token = auth_service.create_access_token(
                 user_id=str(user.id),
-                organization_id=org_id_str,
                 role=user.role,
             )
 
             refresh_token = auth_service.create_refresh_token(
                 user_id=str(user.id),
-                organization_id=org_id_str,
             )
 
             logger.info(f"Token refreshed for user: {user.email}")
@@ -542,16 +557,13 @@ async def extend_session(user: User = Depends(get_current_user)) -> TokenRespons
     Returns:
         TokenResponse: New JWT tokens
     """
-    org_id_str = str(user.organization_id) if user.organization_id else None
     access_token = auth_service.create_access_token(
         user_id=str(user.id),
-        organization_id=org_id_str,
         role=user.role,
     )
 
     refresh_token = auth_service.create_refresh_token(
         user_id=str(user.id),
-        organization_id=org_id_str,
     )
 
     logger.info(f"Session extended for user: {user.email}")
@@ -605,27 +617,30 @@ async def get_current_user_profile(user: User = Depends(get_current_user)) -> Us
     Get current user profile.
 
     Returns profile information for the authenticated user making the request.
-
-    Args:
-        user: Current authenticated user (from JWT or API key)
-
-    Returns:
-        UserProfileResponse: User profile information
-
-    Example:
-        GET /api/v1/auth/me
-        Authorization: Bearer <access_token>
-
-        Response:
-        {
-            "id": "123e4567-e89b-12d3-a456-426614174000",
-            "email": "user@example.com",
-            "username": "johndoe",
-            "role": "member",
-            ...
-        }
+    Includes all organization memberships.
     """
     logger.debug(f"Profile requested for user: {user.email}")
+
+    # Query memberships
+    organizations = []
+    first_org_id = None
+    first_org_name = None
+    async with database_service.get_session() as session:
+        result = await session.execute(
+            select(
+                UserOrganizationMembership.organization_id,
+                Organization.name,
+                Organization.slug,
+            )
+            .join(Organization, UserOrganizationMembership.organization_id == Organization.id)
+            .where(UserOrganizationMembership.user_id == user.id)
+            .order_by(UserOrganizationMembership.created_at)
+        )
+        for org_id, org_name, org_slug in result.all():
+            organizations.append({"id": str(org_id), "name": org_name, "slug": org_slug})
+            if first_org_id is None:
+                first_org_id = str(org_id)
+                first_org_name = org_name
 
     return UserProfileResponse(
         id=str(user.id),
@@ -635,7 +650,9 @@ async def get_current_user_profile(user: User = Depends(get_current_user)) -> Us
         role=user.role,
         is_active=user.is_active,
         is_verified=user.is_verified,
-        organization_id=str(user.organization_id) if user.organization_id else None,
+        organization_id=first_org_id,
+        organization_name=first_org_name,
+        organizations=organizations,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
@@ -700,7 +717,8 @@ async def verify_email(request: VerifyEmailRequest) -> UserProfileResponse:
             role=user.role,
             is_active=user.is_active,
             is_verified=user.is_verified,
-            organization_id=str(user.organization_id) if user.organization_id else None,
+            organization_id=None,
+            organizations=[],
             created_at=user.created_at,
             last_login_at=user.last_login_at,
         )

@@ -188,9 +188,9 @@ class AuthService:
     def create_access_token(
         self,
         user_id: str,
-        organization_id: Optional[str],
         role: str = "member",
         additional_claims: Optional[Dict[str, Any]] = None,
+        organization_id: Optional[str] = None,  # Deprecated, ignored
     ) -> str:
         """
         Create a JWT access token for a user.
@@ -200,34 +200,20 @@ class AuthService:
 
         Args:
             user_id: User's UUID as string
-            organization_id: Organization's UUID as string (None for system admins)
             role: User's role (admin, member)
             additional_claims: Optional additional JWT claims
+            organization_id: Deprecated, kept for backward compatibility
 
         Returns:
             str: Encoded JWT access token
 
-        Example:
-            >>> token = auth_service.create_access_token(
-            ...     user_id="123e4567-e89b-12d3-a456-426614174000",
-            ...     organization_id="987fcdeb-51a2-43f7-8b6a-123456789abc",
-            ...     role="member"
-            ... )
-            >>> print(token)
-            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
-
         Token Claims:
             - sub: User ID (subject)
-            - org_id: Organization ID (null for system admins)
             - role: User role
             - type: "access"
             - exp: Expiration timestamp
             - iat: Issued at timestamp
             - Additional claims if provided
-
-        Note:
-            For admin users (role='admin'), organization_id is None.
-            These users can access any organization via X-Organization-Id header.
         """
         now = datetime.utcnow()
         expire = now + self.access_token_expire
@@ -235,7 +221,6 @@ class AuthService:
         # Standard JWT claims
         claims = {
             "sub": user_id,  # Subject (user ID)
-            "org_id": organization_id,  # None for admin users
             "role": role,
             "type": "access",
             "exp": expire,  # Expiration time
@@ -254,8 +239,8 @@ class AuthService:
     def create_refresh_token(
         self,
         user_id: str,
-        organization_id: Optional[str],
         additional_claims: Optional[Dict[str, Any]] = None,
+        organization_id: Optional[str] = None,  # Deprecated, ignored
     ) -> str:
         """
         Create a JWT refresh token for a user.
@@ -265,40 +250,28 @@ class AuthService:
 
         Args:
             user_id: User's UUID as string
-            organization_id: Organization's UUID as string (None for system admins)
             additional_claims: Optional additional JWT claims
+            organization_id: Deprecated, kept for backward compatibility
 
         Returns:
             str: Encoded JWT refresh token
 
-        Example:
-            >>> token = auth_service.create_refresh_token(
-            ...     user_id="123e4567-e89b-12d3-a456-426614174000",
-            ...     organization_id="987fcdeb-51a2-43f7-8b6a-123456789abc"
-            ... )
-
         Token Claims:
             - sub: User ID (subject)
-            - org_id: Organization ID (null for system admins)
             - type: "refresh"
             - exp: Expiration timestamp
             - iat: Issued at timestamp
-            - Additional claims if provided
 
         Security:
             - Refresh tokens should be stored securely (httpOnly cookies recommended)
             - Consider implementing token rotation on refresh
             - Invalidate refresh tokens on logout
-
-        Note:
-            For admin users (role='admin'), organization_id is None.
         """
         now = datetime.utcnow()
         expire = now + self.refresh_token_expire
 
         claims = {
             "sub": user_id,
-            "org_id": organization_id,  # None for admin users
             "type": "refresh",
             "exp": expire,
             "iat": now,

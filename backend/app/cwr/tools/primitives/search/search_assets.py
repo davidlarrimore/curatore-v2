@@ -268,7 +268,7 @@ class SearchAssetsFunction(BaseFunction):
             semantic_weight = 1 - keyword_weight
             search_results = await ctx.search_service.search(
                 session=ctx.session,
-                organization_id=ctx.organization_id,
+                organization_ids=ctx.org_ids_for_service,
                 query=query,
                 search_mode=search_mode,
                 semantic_weight=semantic_weight,

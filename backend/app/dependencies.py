@@ -39,7 +39,7 @@ Security:
 """
 
 import logging
-from typing import Optional, Union
+from typing import List, Optional, Union
 from uuid import UUID as UUID_TYPE
 
 import jwt
@@ -716,6 +716,18 @@ async def _resolve_effective_org_id(
                 logger.debug(f"User {user.email} using org context: {org.name}")
                 return org_id
 
+        # No header: query first membership by created_at
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(UserOrganizationMembership.organization_id)
+                .where(UserOrganizationMembership.user_id == user.id)
+                .order_by(UserOrganizationMembership.created_at)
+                .limit(1)
+            )
+            first_org = result.scalar_one_or_none()
+            if first_org:
+                return first_org
+        # Fallback to user.organization_id (legacy, will be NULL after migration)
         return user.organization_id
 
     if x_organization_id:
@@ -886,7 +898,23 @@ async def get_current_organization(
                 detail="Invalid organization ID format",
             )
     else:
-        org_id = user.organization_id
+        # Non-admin: query first membership
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(UserOrganizationMembership.organization_id)
+                .where(UserOrganizationMembership.user_id == user.id)
+                .order_by(UserOrganizationMembership.created_at)
+                .limit(1)
+            )
+            org_id = result.scalar_one_or_none()
+            if not org_id:
+                # Fallback to legacy field
+                org_id = user.organization_id
+            if not org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="User has no organization memberships",
+                )
 
     async with database_service.get_session() as session:
         result = await session.execute(
@@ -1015,6 +1043,83 @@ async def get_current_org_id_or_delegated(
             detail="Organization context required. Provide X-Organization-Id header.",
         )
     return org_id
+
+
+# =========================================================================
+# MULTI-ORG CONTEXT (CWR)
+# =========================================================================
+
+
+async def get_user_org_ids(
+    user: User = Depends(get_current_user_or_delegated),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
+) -> List[UUID_TYPE]:
+    """All org IDs the user can access.
+
+    - Admin with header: return [that org]
+    - Admin with no header: return all active org IDs
+    - Member with header: return [that org] (after membership validation)
+    - Member with no header: return all membership org IDs
+    """
+    if user.role == "admin":
+        if x_organization_id:
+            try:
+                org_id = UUID_TYPE(x_organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid organization ID format",
+                )
+            return [org_id]
+        # Admin without header: all active orgs
+        async with database_service.get_session() as session:
+            from app.config import SYSTEM_ORG_SLUG
+            result = await session.execute(
+                select(Organization.id).where(
+                    Organization.is_active == True,
+                    Organization.slug != SYSTEM_ORG_SLUG,
+                )
+            )
+            return [row[0] for row in result.all()]
+
+    # Non-admin
+    if x_organization_id:
+        try:
+            org_id = UUID_TYPE(x_organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid organization ID format",
+            )
+        # Validate membership
+        async with database_service.get_session() as session:
+            membership = await session.execute(
+                select(UserOrganizationMembership).where(
+                    UserOrganizationMembership.user_id == user.id,
+                    UserOrganizationMembership.organization_id == org_id,
+                )
+            )
+            if not membership.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this organization",
+                )
+        return [org_id]
+
+    # No header: all membership orgs
+    async with database_service.get_session() as session:
+        result = await session.execute(
+            select(UserOrganizationMembership.organization_id).where(
+                UserOrganizationMembership.user_id == user.id,
+            )
+        )
+        org_ids = [row[0] for row in result.all()]
+        if not org_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User has no organization memberships. Contact an administrator.",
+            )
+        return org_ids
 
 
 # =========================================================================

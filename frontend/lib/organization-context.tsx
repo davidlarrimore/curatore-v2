@@ -111,9 +111,10 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         return
       }
 
-      // Non-admin users: use their organization
+      // Non-admin users: use first membership organization
       if (!isAdmin) {
-        if (user.organization_id) {
+        const firstOrg = user.organizations?.[0] || (user.organization_id ? { id: user.organization_id, name: user.organization_name || 'Unknown', slug: '' } : null)
+        if (firstOrg) {
           try {
             const org = await organizationsApi.getCurrentOrganization(token!)
             setCurrentOrganization(org)
@@ -121,13 +122,13 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
           } catch {
             // Fallback to basic info from user
             setCurrentOrganization({
-              id: user.organization_id,
-              name: user.organization_name || 'Unknown',
-              display_name: user.organization_name || 'Unknown',
-              slug: '',
+              id: firstOrg.id,
+              name: firstOrg.name,
+              display_name: firstOrg.name,
+              slug: firstOrg.slug || '',
               is_active: true,
             })
-            setOrgContext(user.organization_id)
+            setOrgContext(firstOrg.id)
           }
         }
         setMode('organization')

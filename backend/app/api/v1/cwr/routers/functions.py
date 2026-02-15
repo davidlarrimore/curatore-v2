@@ -9,7 +9,7 @@ Provides endpoints for:
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -34,6 +34,7 @@ from app.dependencies import (
     get_current_org_id_or_delegated,
     get_current_user_or_delegated,
     get_effective_org_id_or_delegated,
+    get_user_org_ids,
 )
 
 logger = logging.getLogger("curatore.api.functions")
@@ -140,7 +141,7 @@ async def execute_function(
     name: str,
     request: ExecuteFunctionRequest,
     current_user: User = Depends(get_current_user_or_delegated),
-    org_id: UUID = Depends(get_current_org_id_or_delegated),
+    org_ids: List[UUID] = Depends(get_user_org_ids),
 ):
     """
     Execute a function directly.
@@ -160,8 +161,9 @@ async def execute_function(
         from app.core.metadata.registry_service import metadata_registry_service
 
         async with database_service.get_session() as check_session:
+            # Check against first org in the list
             catalog = await metadata_registry_service.get_data_source_catalog(
-                check_session, org_id
+                check_session, org_ids[0] if org_ids else None
             )
             if not any(catalog.get(ds, {}).get("is_active", False) for ds in required_ds):
                 raise HTTPException(
@@ -175,7 +177,8 @@ async def execute_function(
             # Create execution context
             ctx = await FunctionContext.create(
                 session=session,
-                organization_id=org_id,
+                organization_ids=org_ids,
+                organization_id=org_ids[0] if len(org_ids) == 1 else None,
                 user_id=current_user.id,
                 dry_run=request.dry_run,
             )

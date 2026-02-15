@@ -287,7 +287,6 @@ class UserResponse(BaseModel):
     organization_id: Optional[str] = Field(None, description="Organization UUID (included in system-wide listings)")
     organization_name: Optional[str] = Field(None, description="Organization name (included in system-wide listings)")
     is_member: Optional[bool] = Field(None, description="Whether user is a member of the current org context (included when org context is set)")
-    is_primary_org: Optional[bool] = Field(None, description="Whether the current org is the user's primary organization (included when org context is set)")
 
     class Config:
         json_schema_extra = {

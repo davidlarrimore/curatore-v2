@@ -67,10 +67,11 @@ See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 **Key Rules**:
 - Admin users have `organization_id=NULL` — **never** use `current_user.organization_id` directly
 - Admin users have implicit access to all orgs (no membership rows needed)
-- Non-admin users can access multiple orgs via `user_organization_memberships` table
+- Non-admin users access orgs exclusively via `user_organization_memberships` table (no primary org concept)
 - Non-admin users send `X-Organization-Id` header to switch orgs; backend validates membership
-- `user.organization_id` remains as the user's primary/default org (fallback when no header)
-- Use `get_effective_org_id` for cross-org admin views, `get_current_org_id` for org-scoped operations
+- Default org for non-admins (no header): first membership by `created_at`
+- CWR functions (MCP/Open WebUI) query across **all** member orgs when no `X-Organization-Id` header is present
+- Use `get_effective_org_id` for cross-org admin views, `get_current_org_id` for org-scoped operations, `get_user_org_ids` for CWR multi-org scoping
 - System org (`__system__`) is for CWR procedure ownership only, never for user assignment
 - CWR function visibility is filtered by org's enabled data sources — functions whose `required_data_sources` aren't active for the org are hidden from listings and the AI generator
 - Generation profiles are server-enforced by role (`admin` → `admin_full`, `member` → `workflow_standard`)
@@ -81,6 +82,7 @@ See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 |-----------|---------|---------|
 | `get_effective_org_id` | `Optional[UUID]` | Cross-org admin views; returns `None` for admin system context |
 | `get_current_org_id` | `UUID` (required) | Org-scoped operations; raises 400 if no org context |
+| `get_user_org_ids` | `List[UUID]` | All org IDs the user can access; used by CWR for multi-org scoping |
 | `require_admin` | `User` | System admin only |
 
 ---

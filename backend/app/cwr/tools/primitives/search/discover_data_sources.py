@@ -106,8 +106,13 @@ class DiscoverDataSourcesFunction(BaseFunction):
 
         try:
             # Get the curated catalog (YAML baseline + org overrides)
+            # Use first org ID for catalog lookup, or None for system context
+            effective_org_id = (
+                ctx.organization_ids[0] if ctx.organization_ids
+                else ctx.organization_id
+            )
             catalog = await metadata_registry_service.get_data_source_catalog(
-                ctx.session, ctx.organization_id
+                ctx.session, effective_org_id
             )
 
             # Filter if requested

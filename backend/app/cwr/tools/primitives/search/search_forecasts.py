@@ -215,7 +215,7 @@ class SearchForecastsFunction(BaseFunction):
             # Use PgSearchService for hybrid search
             search_results = await ctx.search_service.search_forecasts(
                 session=ctx.session,
-                organization_id=ctx.organization_id,
+                organization_ids=ctx.org_ids_for_service,
                 query=query,
                 search_mode=search_mode,
                 semantic_weight=semantic_weight,

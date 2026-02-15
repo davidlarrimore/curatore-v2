@@ -249,14 +249,10 @@ async def invite_user(
         temp_password = secrets.token_urlsafe(15)
         password_hash = await auth_service.hash_password(temp_password)
 
-        # Admin users have no organization (system-wide access)
-        # Other users belong to the current org context
-        user_org_id = None if request.role == "admin" else org_id
-
-        # Create user
+        # Create user (no primary org — memberships are source of truth)
         new_user = User(
             id=uuid4(),
-            organization_id=user_org_id,
+            organization_id=None,
             email=request.email,
             username=request.username,
             password_hash=password_hash,
@@ -269,10 +265,10 @@ async def invite_user(
         session.add(new_user)
 
         # Create membership row for non-admin users
-        if user_org_id:
+        if request.role != "admin":
             membership = UserOrganizationMembership(
                 user_id=new_user.id,
-                organization_id=user_org_id,
+                organization_id=org_id,
             )
             session.add(membership)
 
@@ -415,11 +411,9 @@ async def list_all_users(
                 user, display_name, org_name, membership_id = row
                 is_admin = user.role == "admin"
                 is_member = True if is_admin else (membership_id is not None)
-                is_primary = user.organization_id == effective_org_id
             else:
                 user, display_name, org_name = row
                 is_member = None
-                is_primary = None
 
             users_out.append(
                 UserResponse(
@@ -435,7 +429,6 @@ async def list_all_users(
                     organization_id=str(user.organization_id) if user.organization_id else None,
                     organization_name=display_name or org_name if (display_name or org_name) else None,
                     is_member=is_member,
-                    is_primary_org=is_primary,
                 )
             )
 
@@ -605,17 +598,25 @@ async def update_user(
         if request.role is not None:
             old_role = user.role
             user.role = request.role
-            # Admin users have no organization
-            if request.role == "admin":
-                user.organization_id = None
-            elif old_role == "admin" and request.role != "admin":
-                # Demoting from admin — must assign an org
+            if old_role == "admin" and request.role != "admin":
+                # Demoting from admin — ensure they have at least one membership
                 if not org_id:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Must specify organization context (X-Organization-Id header) when demoting from admin role",
                     )
-                user.organization_id = org_id
+                # Add membership to current org if not already present
+                existing = await session.execute(
+                    select(UserOrganizationMembership).where(
+                        UserOrganizationMembership.user_id == target_user_id,
+                        UserOrganizationMembership.organization_id == org_id,
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    session.add(UserOrganizationMembership(
+                        user_id=target_user_id,
+                        organization_id=org_id,
+                    ))
             logger.info(f"Updated role from {old_role} to {request.role}")
 
         # Toggle org membership
@@ -642,12 +643,19 @@ async def update_user(
                     ))
                     logger.info(f"Membership added: user={user_id} org={org_id}")
             else:
-                if user.organization_id == org_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot remove membership from user's primary organization. Change their primary organization first.",
-                    )
                 if existing:
+                    # Check this isn't the last membership
+                    count_result = await session.execute(
+                        select(func.count()).where(
+                            UserOrganizationMembership.user_id == target_user_id,
+                        )
+                    )
+                    membership_count = count_result.scalar() or 0
+                    if membership_count <= 1:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Cannot remove last membership. User must belong to at least one organization.",
+                        )
                     await session.delete(existing)
                     logger.info(f"Membership removed: user={user_id} org={org_id}")
 

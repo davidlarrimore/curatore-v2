@@ -29,6 +29,7 @@ from app.dependencies import (
     get_current_user,
     get_current_user_or_delegated,
     get_optional_current_user,
+    get_user_org_ids,
 )
 
 logger = logging.getLogger("curatore.api.procedures")
@@ -947,6 +948,7 @@ async def run_procedure(
     request: RunProcedureRequest,
     organization_id: UUID = Depends(get_current_org_id_or_delegated),
     user: Optional[Any] = Depends(get_optional_current_user),
+    user_org_ids: List[UUID] = Depends(get_user_org_ids),
 ):
     """
     Run a procedure.
@@ -1007,6 +1009,7 @@ async def run_procedure(
                 slug,
                 request.params,
                 str(user_id) if user_id else None,
+                [str(oid) for oid in user_org_ids] if user_org_ids else None,
             )
 
             return RunProcedureResponse(
@@ -1024,6 +1027,7 @@ async def run_procedure(
                     params=request.params,
                     user_id=user_id,
                     dry_run=request.dry_run,
+                    organization_ids=user_org_ids,
                 )
 
                 await session.commit()

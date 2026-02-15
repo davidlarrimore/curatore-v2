@@ -13,7 +13,7 @@ The FunctionContext provides functions with access to:
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import markdown
@@ -106,6 +106,7 @@ class FunctionContext:
     # Required context
     session: AsyncSession
     organization_id: Optional[UUID] = None  # None = system context (cross-org)
+    organization_ids: Optional[List[UUID]] = None  # Multi-org context for members
 
     # Optional execution context
     user_id: Optional[UUID] = None
@@ -138,13 +139,19 @@ class FunctionContext:
         """Return a SQLAlchemy filter for org scoping.
 
         In system context (cross-org), returns a no-op true() so queries see
-        all organizations' data.  In normal org context, filters to the
-        current organization.
+        all organizations' data.  With multiple org IDs, uses IN filter.
+        In normal org context, filters to the current organization.
         """
         from sqlalchemy import true
-        if self.is_system_context or self.organization_id is None:
+        if self.is_system_context:
             return true()
-        return column == self.organization_id
+        if self.organization_ids:
+            if len(self.organization_ids) == 1:
+                return column == self.organization_ids[0]
+            return column.in_(self.organization_ids)
+        if self.organization_id is not None:
+            return column == self.organization_id
+        return true()
 
     @property
     def requires_org_id(self) -> UUID:
@@ -152,11 +159,24 @@ class FunctionContext:
 
         Use this in functions that haven't been updated for cross-org yet.
         """
+        if self.organization_ids:
+            return self.organization_ids[0]
         if self.organization_id is None:
             raise ValueError(
                 "This function requires org context but is running in system context"
             )
         return self.organization_id
+
+    @property
+    def org_ids_for_service(self) -> Optional[List[UUID]]:
+        """Get org IDs for service calls. None = no filtering (system context)."""
+        if self.is_system_context:
+            return None
+        if self.organization_ids:
+            return self.organization_ids
+        if self.organization_id:
+            return [self.organization_id]
+        return None
 
     # =========================================================================
     # SERVICE ACCESSORS (Lazy Loading)
@@ -497,6 +517,7 @@ class FunctionContext:
         cls,
         session: AsyncSession,
         organization_id: Optional[UUID] = None,
+        organization_ids: Optional[List[UUID]] = None,
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
         procedure_id: Optional[UUID] = None,
@@ -514,6 +535,7 @@ class FunctionContext:
         return cls(
             session=session,
             organization_id=organization_id,
+            organization_ids=organization_ids,
             user_id=user_id,
             run_id=run_id,
             procedure_id=procedure_id,
@@ -536,6 +558,7 @@ class FunctionContext:
         return FunctionContext(
             session=self.session,
             organization_id=self.organization_id,
+            organization_ids=self.organization_ids,
             user_id=self.user_id,
             run_id=run_id or self.run_id,
             procedure_id=self.procedure_id,

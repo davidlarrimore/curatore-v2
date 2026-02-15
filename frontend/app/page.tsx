@@ -37,7 +37,8 @@ export default function RootRedirectPage() {
       }
 
       // For users without org context loaded yet, try to get their org
-      if (user?.organization_id && token) {
+      const firstOrg = user?.organizations?.[0]
+      if ((firstOrg || user?.organization_id) && token) {
         try {
           const org = await organizationsApi.getCurrentOrganization(token)
           if (org?.slug) {

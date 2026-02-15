@@ -361,7 +361,7 @@ class SearchNoticesFunction(BaseFunction):
         """Use PgSearchService for hybrid search with filters."""
         search_results = await ctx.search_service.search_sam(
             session=ctx.session,
-            organization_id=ctx.organization_id,
+            organization_ids=ctx.org_ids_for_service,
             query=keyword,
             search_mode=search_mode,
             semantic_weight=semantic_weight,
