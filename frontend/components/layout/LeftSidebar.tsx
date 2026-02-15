@@ -307,6 +307,13 @@ export function LeftSidebar({
   // System admin navigation
   const systemAdminNavigation: NavItem[] = isSystemMode ? [
     {
+      name: 'Metadata Catalog',
+      href: '/system/metadata',
+      icon: Tags,
+      current: pathname?.startsWith('/system/metadata'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
       name: 'Maintenance',
       href: '/system/maintenance',
       icon: Wrench,

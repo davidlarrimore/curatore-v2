@@ -20,7 +20,7 @@ import { validateDocumentId, DocumentIdError } from './validators'
  * Uses a permissive record type to avoid excessive type narrowing
  * for inherently dynamic API response structures.
  */
-type JsonRecord = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+export type JsonRecord = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export const API_PATH_VERSION = 'v1' as const
@@ -3415,6 +3415,7 @@ export interface MetadataFieldDefinition {
   applicable_content_types: string[]
   description?: string
   examples?: JsonRecord[]
+  source?: string
 }
 
 /**
@@ -3435,6 +3436,7 @@ export interface FacetDefinition {
   description?: string
   operators: string[]
   mappings: FacetMapping[]
+  source?: string
 }
 
 /**
@@ -3820,8 +3822,199 @@ export const metadataApi = {
   async getPendingSuggestionCount(token: string | undefined): Promise<FacetPendingSuggestions> {
     const url = apiUrl('/data/metadata/facets/pending-suggestions')
     const res = await apiFetch(url, {
-      
+
     })
+    return handleJson(res)
+  },
+}
+
+// ============================================================================
+// SYSTEM METADATA API — calls metadata endpoints WITHOUT X-Organization-Id
+// ============================================================================
+
+export interface OrgOverrideSummary {
+  fields: Record<string, Array<{ org_id: string; org_name: string }>>
+  facets: Record<string, Array<{ org_id: string; org_name: string }>>
+  total_overrides: number
+}
+
+export const systemMetadataApi = {
+  async _fetch(path: string, options?: ApiFetchOptions): Promise<Response> {
+    return apiFetch(path, { ...options, skipOrgContext: true })
+  },
+
+  // -- Read --
+
+  async getCatalog(): Promise<MetadataCatalog> {
+    const res = await this._fetch(apiUrl('/data/metadata/catalog'))
+    return handleJson(res)
+  },
+
+  async getNamespaces(): Promise<MetadataNamespace[]> {
+    const res = await this._fetch(apiUrl('/data/metadata/namespaces'))
+    return handleJson(res)
+  },
+
+  async getNamespaceFields(namespace: string): Promise<MetadataFieldDefinition[]> {
+    const res = await this._fetch(apiUrl(`/data/metadata/namespaces/${namespace}/fields`))
+    return handleJson(res)
+  },
+
+  async getFacets(): Promise<FacetDefinition[]> {
+    const res = await this._fetch(apiUrl('/data/metadata/facets'))
+    return handleJson(res)
+  },
+
+  // -- Write: Fields --
+
+  async createField(namespace: string, data: MetadataFieldCreateRequest): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/fields/${namespace}`), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateField(namespace: string, fieldName: string, data: MetadataFieldUpdateRequest): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`), {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteField(namespace: string, fieldName: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`), {
+      method: 'DELETE',
+    })
+    return handleJson(res)
+  },
+
+  // -- Write: Facets --
+
+  async createFacet(data: FacetCreateRequest): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl('/data/metadata/facets'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateFacet(facetName: string, data: FacetUpdateRequest): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}`), {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteFacet(facetName: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}`), {
+      method: 'DELETE',
+    })
+    return handleJson(res)
+  },
+
+  async addFacetMapping(facetName: string, data: FacetMappingCreateRequest): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/mappings`), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeFacetMapping(facetName: string, contentType: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/mappings/${contentType}`), {
+      method: 'DELETE',
+    })
+    return handleJson(res)
+  },
+
+  // -- Reference Data --
+
+  async getReferenceValues(facetName: string, includeSuggested: boolean = false): Promise<FacetReferenceValue[]> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values?include_suggested=${includeSuggested}`))
+    return handleJson(res)
+  },
+
+  async createReferenceValue(facetName: string, data: { canonical_value: string; display_label?: string; description?: string; aliases?: string[] }): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values`), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateReferenceValue(facetName: string, valueId: string, data: { canonical_value?: string; display_label?: string; description?: string; sort_order?: number; status?: string }): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`), {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteReferenceValue(facetName: string, valueId: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`), {
+      method: 'DELETE',
+    })
+    return handleJson(res)
+  },
+
+  async addReferenceAlias(facetName: string, valueId: string, data: { alias_value: string; source_hint?: string }): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases`), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeReferenceAlias(facetName: string, valueId: string, aliasId: string): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases/${aliasId}`), {
+      method: 'DELETE',
+    })
+    return handleJson(res)
+  },
+
+  // -- Admin Operations --
+
+  async exportFacetsBaseline(): Promise<{ facets_exported: number; mappings_exported: number }> {
+    const res = await this._fetch(apiUrl('/data/metadata/facets/export-baseline'), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async exportReferenceBaseline(): Promise<{ facets_exported: number; values_exported: number; aliases_exported: number }> {
+    const res = await this._fetch(apiUrl('/data/metadata/reference-data/export-baseline'), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async rebuildFromYaml(): Promise<{ fields_synced: number; facets_synced: number; mappings_synced: number; reference_values_seeded: number; reference_aliases_seeded: number }> {
+    const res = await this._fetch(apiUrl('/data/metadata/rebuild-from-yaml'), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async invalidateCache(): Promise<JsonRecord> {
+    const res = await this._fetch(apiUrl('/data/metadata/cache/invalidate'), {
+      method: 'POST',
+    })
+    return handleJson(res)
+  },
+
+  async getOrgOverrideSummary(): Promise<OrgOverrideSummary> {
+    const res = await this._fetch(apiUrl('/data/metadata/org-overrides/summary'))
     return handleJson(res)
   },
 }
@@ -7117,5 +7310,6 @@ export default {
   serviceAccountsApi,
   dataConnectionsApi,
   systemCwrApi,
+  systemMetadataApi,
   utils,
 }

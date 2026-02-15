@@ -939,6 +939,7 @@ class MetadataFieldDefinitionResponse(BaseModel):
     applicable_content_types: List[str] = Field(default_factory=list, description="Content types this field applies to")
     description: Optional[str] = Field(None, description="Human-readable description")
     examples: Optional[List[Any]] = Field(None, description="Example values")
+    source: Optional[str] = Field(None, description="Provenance: 'global' or 'org_override'")
 
 
 class FacetMappingResponse(BaseModel):
@@ -955,6 +956,7 @@ class FacetDefinitionResponse(BaseModel):
     description: Optional[str] = Field(None, description="Description")
     operators: List[str] = Field(default_factory=list, description="Supported filter operators")
     mappings: List[FacetMappingResponse] = Field(default_factory=list, description="Content type mappings")
+    source: Optional[str] = Field(None, description="Provenance: 'global' or 'org_override'")
 
 
 class MetadataNamespaceResponse(BaseModel):

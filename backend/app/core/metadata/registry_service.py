@@ -416,7 +416,7 @@ class MetadataRegistryService:
     async def create_field(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         namespace: str,
         field_name: str,
         data_type: str,
@@ -427,13 +427,13 @@ class MetadataRegistryService:
         examples: Optional[list] = None,
         sensitivity_tag: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create an org-level field definition override."""
+        """Create a field definition (global when org_id=None, org-level otherwise)."""
         from ..database.models import MetadataFieldDefinition
 
         self._ensure_loaded()
 
-        # Validate namespace exists in baseline
-        if namespace not in self._namespaces:
+        # Validate namespace exists in baseline (skip for global — admin may create new namespaces)
+        if organization_id is not None and namespace not in self._namespaces:
             raise ValueError(f"Namespace '{namespace}' not found in global baseline")
 
         if data_type not in self.VALID_DATA_TYPES:
@@ -453,6 +453,14 @@ class MetadataRegistryService:
         )
         session.add(record)
         await session.flush()
+
+        # When creating a global field, reconcile org overrides
+        reconciled = 0
+        if organization_id is None:
+            reconciled = await self._reconcile_org_overrides(
+                session, "field", namespace=namespace, field_name=field_name,
+            )
+
         self.invalidate_cache(organization_id)
 
         return {
@@ -460,28 +468,35 @@ class MetadataRegistryService:
             "namespace": namespace,
             "field_name": field_name,
             "data_type": data_type,
+            "reconciled_overrides": reconciled,
         }
 
     async def update_field(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         namespace: str,
         field_name: str,
         updates: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Update an org-level field definition."""
+        """Update a field definition (global or org-level)."""
         from ..database.models import MetadataFieldDefinition
 
+        org_clause = (
+            MetadataFieldDefinition.organization_id.is_(None)
+            if organization_id is None
+            else MetadataFieldDefinition.organization_id == organization_id
+        )
         query = select(MetadataFieldDefinition).where(
-            MetadataFieldDefinition.organization_id == organization_id,
+            org_clause,
             MetadataFieldDefinition.namespace == namespace,
             MetadataFieldDefinition.field_name == field_name,
         )
         result = await session.execute(query)
         record = result.scalar_one_or_none()
         if not record:
-            raise ValueError(f"Org-level field '{namespace}.{field_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} field '{namespace}.{field_name}' not found")
 
         allowed_fields = {"indexed", "facetable", "applicable_content_types", "description", "examples", "sensitivity_tag", "status"}
         for key, value in updates.items():
@@ -496,22 +511,28 @@ class MetadataRegistryService:
     async def deactivate_field(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         namespace: str,
         field_name: str,
     ) -> Dict[str, Any]:
-        """Soft-delete an org-level field definition."""
+        """Soft-delete a field definition (global or org-level)."""
         from ..database.models import MetadataFieldDefinition
 
+        org_clause = (
+            MetadataFieldDefinition.organization_id.is_(None)
+            if organization_id is None
+            else MetadataFieldDefinition.organization_id == organization_id
+        )
         query = select(MetadataFieldDefinition).where(
-            MetadataFieldDefinition.organization_id == organization_id,
+            org_clause,
             MetadataFieldDefinition.namespace == namespace,
             MetadataFieldDefinition.field_name == field_name,
         )
         result = await session.execute(query)
         record = result.scalar_one_or_none()
         if not record:
-            raise ValueError(f"Org-level field '{namespace}.{field_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} field '{namespace}.{field_name}' not found")
 
         record.status = "inactive"
         await session.flush()
@@ -522,7 +543,7 @@ class MetadataRegistryService:
     async def create_facet(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         facet_name: str,
         display_name: str,
         data_type: str,
@@ -530,7 +551,7 @@ class MetadataRegistryService:
         operators: Optional[List[str]] = None,
         mappings: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Create an org-level facet definition with optional mappings."""
+        """Create a facet definition (global when org_id=None, org-level otherwise)."""
         from ..database.models import FacetDefinition, FacetMapping
 
         if data_type not in self.VALID_DATA_TYPES:
@@ -559,32 +580,47 @@ class MetadataRegistryService:
             mapping_count += 1
 
         await session.flush()
+
+        # When creating a global facet, reconcile org overrides
+        reconciled = 0
+        if organization_id is None:
+            reconciled = await self._reconcile_org_overrides(
+                session, "facet", facet_name=facet_name,
+            )
+
         self.invalidate_cache(organization_id)
 
         return {
             "id": str(facet_record.id),
             "facet_name": facet_name,
             "mappings_created": mapping_count,
+            "reconciled_overrides": reconciled,
         }
 
     async def update_facet(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         facet_name: str,
         updates: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Update an org-level facet definition."""
+        """Update a facet definition (global or org-level)."""
         from ..database.models import FacetDefinition
 
+        org_clause = (
+            FacetDefinition.organization_id.is_(None)
+            if organization_id is None
+            else FacetDefinition.organization_id == organization_id
+        )
         query = select(FacetDefinition).where(
-            FacetDefinition.organization_id == organization_id,
+            org_clause,
             FacetDefinition.facet_name == facet_name,
         )
         result = await session.execute(query)
         record = result.scalar_one_or_none()
         if not record:
-            raise ValueError(f"Org-level facet '{facet_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} facet '{facet_name}' not found")
 
         allowed_fields = {"display_name", "description", "operators", "status"}
         for key, value in updates.items():
@@ -599,20 +635,26 @@ class MetadataRegistryService:
     async def deactivate_facet(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         facet_name: str,
     ) -> Dict[str, Any]:
-        """Soft-delete an org-level facet definition."""
+        """Soft-delete a facet definition (global or org-level)."""
         from ..database.models import FacetDefinition
 
+        org_clause = (
+            FacetDefinition.organization_id.is_(None)
+            if organization_id is None
+            else FacetDefinition.organization_id == organization_id
+        )
         query = select(FacetDefinition).where(
-            FacetDefinition.organization_id == organization_id,
+            org_clause,
             FacetDefinition.facet_name == facet_name,
         )
         result = await session.execute(query)
         record = result.scalar_one_or_none()
         if not record:
-            raise ValueError(f"Org-level facet '{facet_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} facet '{facet_name}' not found")
 
         record.status = "inactive"
         await session.flush()
@@ -623,22 +665,28 @@ class MetadataRegistryService:
     async def add_facet_mapping(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         facet_name: str,
         content_type: str,
         json_path: str,
     ) -> Dict[str, Any]:
-        """Add a content type mapping to an org-level facet."""
+        """Add a content type mapping to a facet (global or org-level)."""
         from ..database.models import FacetDefinition, FacetMapping
 
+        org_clause = (
+            FacetDefinition.organization_id.is_(None)
+            if organization_id is None
+            else FacetDefinition.organization_id == organization_id
+        )
         query = select(FacetDefinition).where(
-            FacetDefinition.organization_id == organization_id,
+            org_clause,
             FacetDefinition.facet_name == facet_name,
         )
         result = await session.execute(query)
         facet_record = result.scalar_one_or_none()
         if not facet_record:
-            raise ValueError(f"Org-level facet '{facet_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} facet '{facet_name}' not found")
 
         mapping = FacetMapping(
             facet_definition_id=facet_record.id,
@@ -654,21 +702,27 @@ class MetadataRegistryService:
     async def remove_facet_mapping(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         facet_name: str,
         content_type: str,
     ) -> Dict[str, Any]:
-        """Remove a content type mapping from an org-level facet."""
+        """Remove a content type mapping from a facet (global or org-level)."""
         from ..database.models import FacetDefinition, FacetMapping
 
+        org_clause = (
+            FacetDefinition.organization_id.is_(None)
+            if organization_id is None
+            else FacetDefinition.organization_id == organization_id
+        )
         query = select(FacetDefinition).where(
-            FacetDefinition.organization_id == organization_id,
+            org_clause,
             FacetDefinition.facet_name == facet_name,
         )
         result = await session.execute(query)
         facet_record = result.scalar_one_or_none()
         if not facet_record:
-            raise ValueError(f"Org-level facet '{facet_name}' not found")
+            scope = "Global" if organization_id is None else "Org-level"
+            raise ValueError(f"{scope} facet '{facet_name}' not found")
 
         mapping_query = select(FacetMapping).where(
             FacetMapping.facet_definition_id == facet_record.id,
@@ -684,6 +738,268 @@ class MetadataRegistryService:
         self.invalidate_cache(organization_id)
 
         return {"facet_name": facet_name, "content_type": content_type, "removed": True}
+
+    # =========================================================================
+    # Reconciliation
+    # =========================================================================
+
+    async def _reconcile_org_overrides(
+        self,
+        session: AsyncSession,
+        entity_type: str,
+        **identifiers: Any,
+    ) -> int:
+        """
+        When a global (master) definition is created, remove any org-level
+        overrides that match it, so orgs inherit the new global definition.
+
+        Returns the count of deleted org-level records.
+        """
+        from ..database.models import FacetDefinition, MetadataFieldDefinition
+
+        deleted = 0
+        affected_org_ids: set = set()
+
+        if entity_type == "field":
+            namespace = identifiers.get("namespace")
+            field_name = identifiers.get("field_name")
+            query = select(MetadataFieldDefinition).where(
+                MetadataFieldDefinition.organization_id.isnot(None),
+                MetadataFieldDefinition.namespace == namespace,
+                MetadataFieldDefinition.field_name == field_name,
+            )
+            result = await session.execute(query)
+            for record in result.scalars():
+                affected_org_ids.add(record.organization_id)
+                await session.delete(record)
+                deleted += 1
+
+        elif entity_type == "facet":
+            facet_name = identifiers.get("facet_name")
+            query = select(FacetDefinition).where(
+                FacetDefinition.organization_id.isnot(None),
+                FacetDefinition.facet_name == facet_name,
+            )
+            result = await session.execute(query)
+            for record in result.scalars():
+                affected_org_ids.add(record.organization_id)
+                await session.delete(record)
+                deleted += 1
+
+        if deleted:
+            await session.flush()
+            for org_id in affected_org_ids:
+                self.invalidate_cache(org_id)
+            logger.info(
+                f"Reconciled {deleted} org override(s) for {entity_type} "
+                f"{identifiers} across {len(affected_org_ids)} org(s)"
+            )
+
+        return deleted
+
+    # =========================================================================
+    # Provenance & Override Summary
+    # =========================================================================
+
+    async def get_effective_registry_with_provenance(
+        self,
+        session: AsyncSession,
+        organization_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        Like get_effective_registry but tags each field/facet with
+        source='global' or source='org_override'.
+        """
+        self._ensure_loaded()
+
+        from ..database.models import (
+            FacetDefinition,
+            FacetMapping,
+            MetadataFieldDefinition,
+        )
+
+        namespaces = dict(self._namespaces)
+
+        # Start with YAML baseline fields tagged as 'global'
+        fields: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for ns, ns_fields in self._fields.items():
+            fields[ns] = {}
+            for fname, fdef in ns_fields.items():
+                fields[ns][fname] = {**fdef, "source": "global"}
+
+        # Start with YAML baseline facets tagged as 'global'
+        facets: Dict[str, Dict[str, Any]] = {}
+        for fname, fdef in self._facets.items():
+            facets[fname] = {**fdef, "source": "global"}
+
+        if organization_id is None:
+            # Also load DB-only global fields/facets not in YAML
+            db_fields_q = select(MetadataFieldDefinition).where(
+                MetadataFieldDefinition.organization_id.is_(None),
+                MetadataFieldDefinition.status == "active",
+            )
+            result = await session.execute(db_fields_q)
+            for record in result.scalars():
+                ns = record.namespace
+                if ns not in fields:
+                    fields[ns] = {}
+                if record.field_name not in fields.get(ns, {}):
+                    fields[ns][record.field_name] = {
+                        "data_type": record.data_type,
+                        "indexed": record.indexed,
+                        "facetable": record.facetable,
+                        "applicable_content_types": record.applicable_content_types or [],
+                        "description": record.description,
+                        "examples": record.examples,
+                        "sensitivity_tag": record.sensitivity_tag,
+                        "source": "global",
+                    }
+
+            db_facets_q = select(FacetDefinition).where(
+                FacetDefinition.organization_id.is_(None),
+                FacetDefinition.status == "active",
+            )
+            result = await session.execute(db_facets_q)
+            for facet_record in result.scalars():
+                if facet_record.facet_name not in facets:
+                    mappings_q = select(FacetMapping).where(
+                        FacetMapping.facet_definition_id == facet_record.id
+                    )
+                    mappings_result = await session.execute(mappings_q)
+                    mapping_dict = {
+                        m.content_type: m.json_path for m in mappings_result.scalars()
+                    }
+                    facets[facet_record.facet_name] = {
+                        "display_name": facet_record.display_name,
+                        "data_type": facet_record.data_type,
+                        "description": facet_record.description,
+                        "operators": facet_record.operators or ["eq", "in"],
+                        "mappings": mapping_dict,
+                        "source": "global",
+                    }
+
+            return {
+                "namespaces": namespaces,
+                "fields": fields,
+                "facets": facets,
+            }
+
+        # Load org-level field overrides
+        org_fields_q = select(MetadataFieldDefinition).where(
+            MetadataFieldDefinition.organization_id == organization_id,
+            MetadataFieldDefinition.status == "active",
+        )
+        result = await session.execute(org_fields_q)
+        for record in result.scalars():
+            ns = record.namespace
+            if ns not in fields:
+                fields[ns] = {}
+            fields[ns][record.field_name] = {
+                "data_type": record.data_type,
+                "indexed": record.indexed,
+                "facetable": record.facetable,
+                "applicable_content_types": record.applicable_content_types or [],
+                "description": record.description,
+                "examples": record.examples,
+                "sensitivity_tag": record.sensitivity_tag,
+                "source": "org_override",
+            }
+
+        # Load org-level facet overrides
+        org_facets_q = select(FacetDefinition).where(
+            FacetDefinition.organization_id == organization_id,
+            FacetDefinition.status == "active",
+        )
+        result = await session.execute(org_facets_q)
+        for facet_record in result.scalars():
+            mappings_q = select(FacetMapping).where(
+                FacetMapping.facet_definition_id == facet_record.id
+            )
+            mappings_result = await session.execute(mappings_q)
+            mapping_dict = {
+                m.content_type: m.json_path for m in mappings_result.scalars()
+            }
+            facets[facet_record.facet_name] = {
+                "display_name": facet_record.display_name,
+                "data_type": facet_record.data_type,
+                "description": facet_record.description,
+                "operators": facet_record.operators or ["eq", "in"],
+                "mappings": mapping_dict,
+                "source": "org_override",
+            }
+
+        return {
+            "namespaces": namespaces,
+            "fields": fields,
+            "facets": facets,
+        }
+
+    async def get_org_override_summary(self, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Return a summary of which orgs have custom overrides.
+
+        Returns:
+            {
+                "fields": {"{ns}.{field}": [{"org_id": ..., "org_name": ...}, ...]},
+                "facets": {"{facet_name}": [{"org_id": ..., "org_name": ...}, ...]},
+                "total_overrides": int,
+            }
+        """
+        from ..database.models import (
+            FacetDefinition,
+            MetadataFieldDefinition,
+            Organization,
+        )
+
+        # Fetch all org-level field overrides
+        field_q = select(
+            MetadataFieldDefinition.namespace,
+            MetadataFieldDefinition.field_name,
+            MetadataFieldDefinition.organization_id,
+            Organization.name,
+        ).join(
+            Organization,
+            MetadataFieldDefinition.organization_id == Organization.id,
+        ).where(
+            MetadataFieldDefinition.organization_id.isnot(None),
+        )
+        field_result = await session.execute(field_q)
+
+        field_overrides: Dict[str, list] = {}
+        for ns, fname, org_id, org_name in field_result:
+            key = f"{ns}.{fname}"
+            field_overrides.setdefault(key, []).append({
+                "org_id": str(org_id),
+                "org_name": org_name,
+            })
+
+        # Fetch all org-level facet overrides
+        facet_q = select(
+            FacetDefinition.facet_name,
+            FacetDefinition.organization_id,
+            Organization.name,
+        ).join(
+            Organization,
+            FacetDefinition.organization_id == Organization.id,
+        ).where(
+            FacetDefinition.organization_id.isnot(None),
+        )
+        facet_result = await session.execute(facet_q)
+
+        facet_overrides: Dict[str, list] = {}
+        for facet_name, org_id, org_name in facet_result:
+            facet_overrides.setdefault(facet_name, []).append({
+                "org_id": str(org_id),
+                "org_name": org_name,
+            })
+
+        total = sum(len(v) for v in field_overrides.values()) + sum(len(v) for v in facet_overrides.values())
+
+        return {
+            "fields": field_overrides,
+            "facets": facet_overrides,
+            "total_overrides": total,
+        }
 
     # =========================================================================
     # Data Source Type Registry
