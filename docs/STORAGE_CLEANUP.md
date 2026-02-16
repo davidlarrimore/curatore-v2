@@ -274,9 +274,7 @@ Ensure MinIO credentials have delete permissions:
 
 ## Related Documentation
 
-- [Storage Architecture](../CLAUDE.md#file-storage) - Object storage setup
-- [Architecture Refactor Progress](../ARCHITECTURE_PROGRESS.md) - Current phase work
-- [Data Architecture Spec](../UPDATED_DATA_ARCHITECTURE.md) - Storage requirements
+- [Storage Architecture](../CLAUDE.md) - Object storage setup
 
 ## Notes
 

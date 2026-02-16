@@ -1125,18 +1125,10 @@ if (job.status === 'SUCCESS') {
 ### Documentation
 - **Interactive API Docs**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
-- **User Guide**: [USER_GUIDE.md](USER_GUIDE.md)
-- **Deployment Guide**: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
+- **Development Guide**: [CLAUDE.md](../CLAUDE.md)
 
 ### Getting Help
 - **GitHub Issues**: Report bugs and feature requests
-- **Email Support**: support@curatore.io (production deployments)
-- **Status Page**: https://status.curatore.io
-
-### Additional Resources
-- **Architecture**: [plan.md](plan.md)
-- **Development Guide**: [CLAUDE.md](CLAUDE.md)
-- **Testing Guide**: [backend/tests/README_TESTS.md](backend/tests/README_TESTS.md)
 
 ---
 

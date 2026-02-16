@@ -183,19 +183,22 @@ When modifying service adapter configuration:
 
 ## Deep Reference Docs
 
+Cross-cutting docs live in [curatore-localdev/docs/](https://github.com/Amivero-LLC/curatore-localdev/tree/main/docs).
+
 | Document | Description |
 |----------|-------------|
 | [Search & Indexing](docs/SEARCH_INDEXING.md) | Hybrid search, pgvector, chunking, embeddings, reindexing |
 | [Metadata Catalog](docs/METADATA_CATALOG.md) | Namespaces, fields, facets, reference data, registry service |
 | [Queue System](docs/QUEUE_SYSTEM.md) | Queue architecture, job groups, cancellation |
 | [Functions & Procedures](docs/FUNCTIONS_PROCEDURES.md) | Workflow automation, CWR functions reference |
-| [Document Processing](docs/DOCUMENT_PROCESSING.md) | Extraction pipeline |
-| [Data Connections](docs/DATA_CONNECTIONS.md) | Adding new integrations |
+| [Document Processing](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/DOCUMENT_PROCESSING.md) | Extraction pipeline |
+| [Data Connections](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/DATA_CONNECTIONS.md) | Adding new integrations |
 | [SAM.gov Integration](docs/SAM_INTEGRATION.md) | SAM.gov data model and API |
 | [Salesforce Integration](docs/SALESFORCE_INTEGRATION.md) | Salesforce CRM integration |
 | [SharePoint Integration](docs/SHAREPOINT_INTEGRATION.md) | SharePoint folder sync |
 | [Forecast Integration](docs/FORECAST_INTEGRATION.md) | Acquisition forecast sources |
-| [Configuration](docs/CONFIGURATION.md) | Environment and YAML config reference |
+| [Configuration](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/CONFIGURATION.md) | Environment and YAML config reference |
+| [Extraction Engines](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/EXTRACTION_SERVICES.md) | Triage, engine comparison |
 | [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) | Roles, org context, RBAC, dependencies |
 | [Maintenance Tasks](docs/MAINTENANCE_TASKS.md) | Scheduled background tasks |
 | [API Documentation](docs/API_DOCUMENTATION.md) | Complete API reference (also at `/docs`) |

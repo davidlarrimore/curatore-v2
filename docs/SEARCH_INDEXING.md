@@ -1163,8 +1163,8 @@ docker exec curatore-postgres psql -U curatore -d curatore -c \
 
 | Document | Description |
 |----------|-------------|
-| [Configuration](CONFIGURATION.md) | config.yml settings including search and LLM |
+| [Configuration](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/CONFIGURATION.md) | config.yml settings including search and LLM |
 | [Maintenance Tasks](MAINTENANCE_TASKS.md) | Scheduled task system, including search.reindex |
-| [Document Processing](DOCUMENT_PROCESSING.md) | Extraction pipeline that feeds indexing |
+| [Document Processing](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/DOCUMENT_PROCESSING.md) | Extraction pipeline that feeds indexing |
 | [API Documentation](API_DOCUMENTATION.md) | Complete API reference |
 | [Queue System](QUEUE_SYSTEM.md) | Celery queue architecture |

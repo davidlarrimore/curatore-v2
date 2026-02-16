@@ -631,6 +631,6 @@ To create a new classification dimension, define the field + facet in YAML and c
 |----------|-------------|
 | [Search & Indexing](SEARCH_INDEXING.md) | Hybrid search, chunking, embeddings, metadata filtering |
 | [Functions & Procedures](FUNCTIONS_PROCEDURES.md) | CWR workflow automation (procedures that use metadata) |
-| [Configuration](CONFIGURATION.md) | Environment and YAML config |
+| [Configuration](https://github.com/Amivero-LLC/curatore-localdev/blob/main/docs/CONFIGURATION.md) | Environment and YAML config |
 | [API Documentation](API_DOCUMENTATION.md) | Complete API reference |
 | [MCP Gateway](../mcp/README.md) | AI tool server and MCP protocol |
