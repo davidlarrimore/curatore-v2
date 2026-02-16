@@ -164,7 +164,7 @@ MCP Gateway → Backend:   X-API-Key: <BACKEND_API_KEY>      (ServiceAccount key
 - A ServiceAccount must be created in Curatore; its API key is used as `BACKEND_API_KEY`
 - Side-effect gating is handled at the MCP policy level (`policy.yaml` allowlist)
 
-See [MCP & Open WebUI Guide](MCP_OPEN_WEBUI.md) for the full setup walkthrough.
+See the [MCP & Open WebUI Guide](https://github.com/Amivero-LLC/curatore-mcp-service/blob/main/docs/OPEN_WEBUI_INTEGRATION.md) in the MCP service repo for the full setup walkthrough.
 
 ---
 

@@ -177,7 +177,7 @@ The following file types are **not supported** for extraction:
 
 ## Triage Decision Logic
 
-The triage service (`backend/app/services/triage_service.py`) runs analysis in < 100ms:
+The triage service (in the [Document Service](https://github.com/Amivero-LLC/curatore-document-service) at `app/services/triage_service.py`) runs analysis in < 100ms:
 
 ### PDF Analysis (using PyMuPDF)
 
