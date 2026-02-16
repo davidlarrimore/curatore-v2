@@ -203,6 +203,7 @@ def _create_all_tables(engine: sqlalchemy.engine.Engine) -> None:
 
     Current parity:
     - roles: 20260212_add_roles_table + 20260214_simplify_roles → admin, member
+    - unified_forecasts VIEW: 20260205_add_forecast_integration → UNION ALL view
     """
     from app.core.database.base import Base
     from app.core.database import models  # noqa: F401 — register all models
@@ -229,6 +230,105 @@ def _create_all_tables(engine: sqlalchemy.engine.Engine) -> None:
             ON CONFLICT (name) DO NOTHING
         """))
     logger.info("   Reference data seeded")
+
+    # Create SQL VIEWs that Alembic migrations normally create.
+    # create_all() only creates tables, not raw SQL objects like VIEWs.
+    logger.info("   Creating SQL views...")
+    with engine.begin() as conn:
+        # unified_forecasts VIEW (from 20260205_add_forecast_integration)
+        conn.execute(text("DROP VIEW IF EXISTS unified_forecasts"))
+        conn.execute(text("""
+            CREATE VIEW unified_forecasts AS
+            SELECT
+                id, organization_id, sync_id,
+                'ag' AS source_type,
+                nid AS source_id,
+                title, description,
+                agency_name,
+                naics_codes::jsonb AS naics_codes,
+                acquisition_phase,
+                set_aside_type,
+                NULL::varchar AS contract_type,
+                NULL::varchar AS contract_vehicle,
+                estimated_solicitation_date,
+                estimated_award_fy AS fiscal_year,
+                estimated_award_quarter,
+                NULL::varchar AS dollar_range,
+                NULL::date AS pop_start_date,
+                NULL::date AS pop_end_date,
+                NULL::varchar AS pop_city,
+                NULL::varchar AS pop_state,
+                NULL::varchar AS pop_country,
+                poc_name, poc_email,
+                sbs_name, sbs_email,
+                NULL::varchar AS incumbent_contractor,
+                source_url,
+                first_seen_at, last_updated_at, change_hash,
+                indexed_at, created_at, updated_at
+            FROM ag_forecasts
+
+            UNION ALL
+
+            SELECT
+                id, organization_id, sync_id,
+                'apfs' AS source_type,
+                apfs_number AS source_id,
+                title, description,
+                'Department of Homeland Security' AS agency_name,
+                jsonb_build_array(jsonb_build_object('code', naics_code, 'description', naics_description)) AS naics_codes,
+                NULL::varchar AS acquisition_phase,
+                small_business_set_aside AS set_aside_type,
+                contract_type,
+                contract_vehicle,
+                estimated_solicitation_date,
+                fiscal_year,
+                award_quarter AS estimated_award_quarter,
+                dollar_range,
+                pop_start_date,
+                pop_end_date,
+                NULL::varchar AS pop_city,
+                NULL::varchar AS pop_state,
+                NULL::varchar AS pop_country,
+                poc_name, poc_email,
+                sbs_name, sbs_email,
+                NULL::varchar AS incumbent_contractor,
+                CASE WHEN apfs_id IS NOT NULL
+                    THEN 'https://apfs-cloud.dhs.gov/record/' || apfs_id::text || '/public-print/'
+                    ELSE NULL
+                END AS source_url,
+                first_seen_at, last_updated_at, change_hash,
+                indexed_at, created_at, updated_at
+            FROM apfs_forecasts
+
+            UNION ALL
+
+            SELECT
+                id, organization_id, sync_id,
+                'state' AS source_type,
+                row_hash AS source_id,
+                title, description,
+                'Department of State' AS agency_name,
+                jsonb_build_array(jsonb_build_object('code', naics_code)) AS naics_codes,
+                acquisition_phase,
+                set_aside_type,
+                contract_type,
+                NULL::varchar AS contract_vehicle,
+                estimated_solicitation_date,
+                fiscal_year,
+                estimated_award_quarter,
+                estimated_value AS dollar_range,
+                NULL::date AS pop_start_date,
+                NULL::date AS pop_end_date,
+                pop_city, pop_state, pop_country,
+                NULL::varchar AS poc_name, NULL::varchar AS poc_email,
+                NULL::varchar AS sbs_name, NULL::varchar AS sbs_email,
+                incumbent_contractor,
+                NULL::varchar AS source_url,
+                first_seen_at, last_updated_at, change_hash,
+                indexed_at, created_at, updated_at
+            FROM state_forecasts
+        """))
+    logger.info("   SQL views created")
 
 
 def _alembic_stamp_head() -> None:
